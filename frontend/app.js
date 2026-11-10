@@ -10,8 +10,24 @@ const title = document.querySelector("#auth-title");
 const message = document.querySelector("#auth-message");
 const toggle = document.querySelector("#toggle-auth");
 const account = document.querySelector("#account");
+const installButton = document.querySelector("#install-app");
 
 let signupMode = true;
+let deferredInstallPrompt;
+
+window.addEventListener("beforeinstallprompt", (event) => {
+  event.preventDefault();
+  deferredInstallPrompt = event;
+  installButton.hidden = false;
+});
+
+installButton.addEventListener("click", async () => {
+  if (!deferredInstallPrompt) return;
+  deferredInstallPrompt.prompt();
+  await deferredInstallPrompt.userChoice;
+  deferredInstallPrompt = null;
+  installButton.hidden = true;
+});
 
 function setMessage(text, isError = false) {
   message.textContent = text;

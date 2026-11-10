@@ -1,4 +1,4 @@
-const CACHE = "bc-connect-v2";
+const CACHE = "bc-connect-v3";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll([
@@ -6,6 +6,7 @@ self.addEventListener("install", (event) => {
     "/static/style.css",
     "/static/manifest.json",
     "/static/logo.svg",
+    "/static/assets/campus-connect.svg",
     "/static/icons/icon-192.png",
     "/static/icons/icon-512.png",
   ])));
