@@ -62,6 +62,15 @@ class SwipePayload(BaseModel):
     liked: bool
 
 
+class ReportPayload(BaseModel):
+    target_id: int
+    reason: str = Field(min_length=3, max_length=1000)
+
+
+class ReportDecision(BaseModel):
+    action: str = Field(pattern="^(ban|dismiss)$")
+
+
 @app.on_event("startup")
 def startup() -> None:
     initialize_database()
@@ -297,6 +306,73 @@ def matches(user=Depends(approved_user)):
             (user["id"], user["id"], user["id"]),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+@app.post("/api/report", status_code=status.HTTP_201_CREATED)
+def report(payload: ReportPayload, user=Depends(approved_user)):
+    if payload.target_id == user["id"]:
+        raise HTTPException(status_code=400, detail="Tu ne peux pas te signaler toi-même.")
+    with get_db() as db:
+        user_a, user_b = sorted((user["id"], payload.target_id))
+        existing_match = db.execute(
+            "select 1 from matches where user_a = ? and user_b = ?",
+            (user_a, user_b),
+        ).fetchone()
+        if existing_match is None:
+            raise HTTPException(status_code=403, detail="Un signalement est possible après un match.")
+        db.execute(
+            "insert into reports(reporter_id, reported_id, reason) values (?, ?, ?)",
+            (user["id"], payload.target_id, payload.reason.strip()),
+        )
+        db.execute("delete from matches where user_a = ? and user_b = ?", (user_a, user_b))
+        db.execute(
+            """
+            insert into swipes(swiper_id, target_id, liked) values (?, ?, 0)
+            on conflict(swiper_id, target_id) do update set liked = 0
+            """,
+            (user["id"], payload.target_id),
+        )
+        db.execute(
+            """
+            insert into swipes(swiper_id, target_id, liked) values (?, ?, 0)
+            on conflict(swiper_id, target_id) do update set liked = 0
+            """,
+            (payload.target_id, user["id"]),
+        )
+    return {"ok": True}
+
+
+@app.get("/api/admin/reports")
+def admin_reports(user=Depends(current_admin)):
+    with get_db() as db:
+        rows = db.execute(
+            """
+            select r.id, r.reason, r.status, r.created_at,
+                   reporter.email as reporter_email, reported.email as reported_email
+            from reports r
+            join users reporter on reporter.id = r.reporter_id
+            join users reported on reported.id = r.reported_id
+            order by case when r.status = 'pending' then 0 else 1 end, r.created_at desc
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.post("/api/admin/reports/{report_id}")
+def decide_report(report_id: int, payload: ReportDecision, user=Depends(current_admin)):
+    with get_db() as db:
+        report_row = db.execute(
+            "select reported_id from reports where id = ?", (report_id,)
+        ).fetchone()
+        if report_row is None:
+            raise HTTPException(status_code=404, detail="Signalement introuvable.")
+        if payload.action == "ban":
+            db.execute("update users set banned = 1 where id = ?", (report_row["reported_id"],))
+            db.execute("delete from sessions where user_id = ?", (report_row["reported_id"],))
+            db.execute("update reports set status = 'banned' where id = ?", (report_id,))
+        else:
+            db.execute("update reports set status = 'dismissed' where id = ?", (report_id,))
+    return {"ok": True, "status": "banned" if payload.action == "ban" else "dismissed"}
 
 
 @app.post("/api/kyi", status_code=status.HTTP_201_CREATED)

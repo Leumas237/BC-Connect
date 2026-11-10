@@ -66,6 +66,15 @@ create table if not exists matches (
     primary key (user_a, user_b),
     check (user_a < user_b)
 );
+
+create table if not exists reports (
+    id integer primary key autoincrement,
+    reporter_id integer not null references users(id) on delete cascade,
+    reported_id integer not null references users(id) on delete cascade,
+    reason text not null,
+    status text not null default 'pending',
+    created_at text not null default current_timestamp
+);
 """
 
 

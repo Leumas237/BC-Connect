@@ -285,10 +285,31 @@ async function logout() {
                 ${socialLink("Snapchat", match.snapchat)}
                 ${socialLink("WhatsApp", match.whatsapp)}
               </div>
+              <button class="report-link" data-target-id="${match.id}" type="button">Signaler ce match</button>
             </article>
           `).join("");
+          list.querySelectorAll(".report-link").forEach((button) => {
+            button.addEventListener("click", () => reportMatch(Number(button.dataset.targetId)));
+          });
         } catch (error) {
           list.innerHTML = `<p class="error">${escapeHtml(error.message)}</p>`;
+        }
+
+        async function reportMatch(targetId) {
+          const reason = window.prompt("Pourquoi veux-tu signaler ce match ?");
+          if (!reason?.trim()) return;
+          const token = localStorage.getItem("bc_connect_token");
+          try {
+            await request("/api/report", {
+              method: "POST",
+              headers: {Authorization: `Bearer ${token}`},
+              body: JSON.stringify({target_id: targetId, reason: reason.trim()}),
+            });
+            setMessage("Signalement envoyé. Le match a été fermé.");
+            loadMatches();
+          } catch (error) {
+            setMessage(error.message, true);
+          }
         }
       }
 
