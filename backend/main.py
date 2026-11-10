@@ -54,6 +54,11 @@ class ProfilePayload(BaseModel):
     invisible: bool = False
 
 
+class SwipePayload(BaseModel):
+    target_id: int
+    liked: bool
+
+
 @app.on_event("startup")
 def startup() -> None:
     initialize_database()
@@ -182,6 +187,100 @@ def update_profile(payload: ProfilePayload, user=Depends(approved_user)):
             ),
         )
     return {"ok": True}
+
+
+@app.get("/api/discover")
+def discover(user=Depends(approved_user)):
+    with get_db() as db:
+        rows = db.execute(
+            """
+            select u.id, u.name, p.bio, p.cycle, p.filiere, p.classe,
+                   p.interests, p.intent, p.age
+            from users u
+            join profiles p on p.user_id = u.id
+            where u.id != ?
+              and u.approved = 1
+              and u.banned = 0
+              and p.invisible = 0
+              and not exists (
+                  select 1 from swipes s
+                  where s.swiper_id = ? and s.target_id = u.id
+              )
+            order by u.last_seen desc, u.id desc
+            limit 30
+            """,
+            (user["id"], user["id"]),
+        ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "name": row["name"],
+            "bio": row["bio"],
+            "cycle": row["cycle"],
+            "filiere": row["filiere"],
+            "classe": row["classe"],
+            "interests": json.loads(row["interests"]),
+            "intent": row["intent"],
+            "age": row["age"],
+        }
+        for row in rows
+    ]
+
+
+@app.post("/api/swipe")
+def swipe(payload: SwipePayload, user=Depends(approved_user)):
+    if payload.target_id == user["id"]:
+        raise HTTPException(status_code=400, detail="Tu ne peux pas sélectionner ton propre profil.")
+    with get_db() as db:
+        target = db.execute(
+            "select id from users where id = ? and approved = 1 and banned = 0",
+            (payload.target_id,),
+        ).fetchone()
+        if target is None:
+            raise HTTPException(status_code=404, detail="Profil indisponible.")
+        db.execute(
+            """
+            insert into swipes(swiper_id, target_id, liked)
+            values (?, ?, ?)
+            on conflict(swiper_id, target_id) do update set liked = excluded.liked,
+            created_at = current_timestamp
+            """,
+            (user["id"], payload.target_id, int(payload.liked)),
+        )
+        matched = False
+        if payload.liked:
+            reciprocal = db.execute(
+                """
+                select 1 from swipes
+                where swiper_id = ? and target_id = ? and liked = 1
+                """,
+                (payload.target_id, user["id"]),
+            ).fetchone()
+            if reciprocal:
+                user_a, user_b = sorted((user["id"], payload.target_id))
+                db.execute(
+                    "insert or ignore into matches(user_a, user_b) values (?, ?)",
+                    (user_a, user_b),
+                )
+                matched = True
+    return {"ok": True, "matched": matched}
+
+
+@app.get("/api/matches")
+def matches(user=Depends(approved_user)):
+    with get_db() as db:
+        rows = db.execute(
+            """
+            select u.id, u.name, p.bio, p.cycle, p.filiere, p.classe, m.created_at
+            from matches m
+            join users u on u.id = case when m.user_a = ? then m.user_b else m.user_a end
+            left join profiles p on p.user_id = u.id
+            where m.user_a = ? or m.user_b = ?
+            order by m.created_at desc
+            """,
+            (user["id"], user["id"], user["id"]),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 @app.post("/api/kyi", status_code=status.HTTP_201_CREATED)

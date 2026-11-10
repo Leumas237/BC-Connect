@@ -94,6 +94,10 @@ function showAccount(user) {
           <label class="checkbox"><input name="invisible" type="checkbox"> Masquer mon profil</label>
           <button class="button primary" type="submit">Enregistrer mon profil</button>
         </form>
+        <section class="discovery">
+          <h3>Découvrir la communauté</h3>
+          <div id="discover-list"><p class="muted">Chargement des profils...</p></div>
+        </section>
       `
       : user.kyi_submitted
       ? `<p class="muted">Dossier étudiant soumis. Il est en attente de validation.</p>`
@@ -113,7 +117,10 @@ function showAccount(user) {
   account.querySelector("#logout").addEventListener("click", logout);
   account.querySelector("#kyi-form")?.addEventListener("submit", submitKyi);
   account.querySelector("#profile-form")?.addEventListener("submit", submitProfile);
-  if (user.approved) loadProfile();
+  if (user.approved) {
+    loadProfile();
+    loadDiscover();
+  }
 }
 
 function escapeHtml(value) {
@@ -234,6 +241,56 @@ async function logout() {
         setMessage(error.message, true);
       } finally {
         button.disabled = false;
+      }
+
+      async function loadDiscover() {
+        const list = document.querySelector("#discover-list");
+        if (!list) return;
+        const token = localStorage.getItem("bc_connect_token");
+        try {
+          const profiles = await request("/api/discover", {
+            headers: {Authorization: `Bearer ${token}`},
+          });
+          if (!profiles.length) {
+            list.innerHTML = '<p class="muted">Aucun nouveau profil pour le moment.</p>';
+            return;
+          }
+          list.innerHTML = profiles.map((profile) => `
+            <article class="discover-card" data-profile-id="${profile.id}">
+              <div>
+                <strong>${escapeHtml(profile.name)}${profile.age ? `, ${profile.age}` : ""}</strong>
+                <span>${escapeHtml([profile.cycle, profile.filiere, profile.classe].filter(Boolean).join(" · "))}</span>
+                <p>${escapeHtml(profile.bio || "Profil sans bio pour le moment.")}</p>
+              </div>
+              <div class="discover-actions">
+                <button class="button secondary pass" type="button">Passer</button>
+                <button class="button primary like" type="button">J’aime</button>
+              </div>
+            </article>
+          `).join("");
+          list.querySelectorAll(".discover-card").forEach((card) => {
+            card.querySelector(".pass").addEventListener("click", () => submitSwipe(card, false));
+            card.querySelector(".like").addEventListener("click", () => submitSwipe(card, true));
+          });
+        } catch (error) {
+          list.innerHTML = `<p class="error">${escapeHtml(error.message)}</p>`;
+        }
+      }
+
+      async function submitSwipe(card, liked) {
+        const token = localStorage.getItem("bc_connect_token");
+        const targetId = Number(card.dataset.profileId);
+        card.remove();
+        try {
+          const result = await request("/api/swipe", {
+            method: "POST",
+            headers: {Authorization: `Bearer ${token}`},
+            body: JSON.stringify({target_id: targetId, liked}),
+          });
+          if (result.matched) setMessage("C’est un match ! Vous vous êtes choisis mutuellement.");
+        } catch (error) {
+          setMessage(error.message, true);
+        }
       }
     }
   }

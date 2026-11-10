@@ -46,6 +46,23 @@ create table if not exists profiles (
     invisible integer not null default 0,
     updated_at text not null default current_timestamp
 );
+
+create table if not exists swipes (
+    swiper_id integer not null references users(id) on delete cascade,
+    target_id integer not null references users(id) on delete cascade,
+    liked integer not null,
+    created_at text not null default current_timestamp,
+    primary key (swiper_id, target_id),
+    check (swiper_id != target_id)
+);
+
+create table if not exists matches (
+    user_a integer not null references users(id) on delete cascade,
+    user_b integer not null references users(id) on delete cascade,
+    created_at text not null default current_timestamp,
+    primary key (user_a, user_b),
+    check (user_a < user_b)
+);
 """
 
 
