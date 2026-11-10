@@ -31,6 +31,45 @@
         validée par un conseil juridique camerounais avant ouverture au public.
       </p>
 
+      <h2>2 bis. Traduction des obligations en contrôles BC Connect</h2>
+      <table class="legal-table">
+        <thead>
+          <tr><th>Texte</th><th>Exigence prise en compte</th><th>Contrôle dans l’application</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Loi n°2024/017, objet et champ d’application</td>
+            <td>Le traitement de données de personnes établies ou résidant au Cameroun est couvert.</td>
+            <td>La présente politique s’applique aux comptes, profils, photos, KYI, matchs et signalements.</td>
+          </tr>
+          <tr>
+            <td>Loi n°2024/017, principes de traitement</td>
+            <td>Finalité déterminée, proportionnalité, transparence, sécurité et durée maîtrisée.</td>
+            <td>Collecte séparée du compte, du profil et du KYI ; accès KYI restreint ; durée de conservation à fixer par l’exploitant.</td>
+          </tr>
+          <tr>
+            <td>Loi n°2024/017, droits des personnes</td>
+            <td>Information, accès, rectification, suppression et retrait lorsque applicable.</td>
+            <td>Politique affichée à l’inscription, export `/api/account/export` et suppression `/api/account/delete`.</td>
+          </tr>
+          <tr>
+            <td>Loi n°2024/017, sécurité et confidentialité</td>
+            <td>Protection contre les accès, pertes ou divulgations non autorisés.</td>
+            <td>PBKDF2 pour les mots de passe, sessions invalidées au bannissement, KYI hors statique, contrôle de rôle admin.</td>
+          </tr>
+          <tr>
+            <td>Loi n°2024/017, sous-traitance et transferts</td>
+            <td>Les prestataires et transferts doivent être documentés et encadrés.</td>
+            <td>Aucun fournisseur externe ne doit être activé sans contrat, analyse de transfert et validation préalable.</td>
+          </tr>
+          <tr>
+            <td>Loi n°2010/012, vie privée et sécurité numérique</td>
+            <td>Respect de la vie privée, de la dignité et sécurité des systèmes.</td>
+            <td>Signalement, bannissement, limitation des données visibles et WebSocket authentifié.</td>
+          </tr>
+        </tbody>
+      </table>
+
       <h2>3. Données collectées</h2>
       <ul>
         <li>compte : nom, email, mot de passe haché, sessions et dates d'activité ;</li>
