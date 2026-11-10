@@ -15,6 +15,7 @@ const sectionMenu = document.querySelector("#section-menu");
 
 let signupMode = true;
 let deferredInstallPrompt;
+let discoverProfiles = [];
 
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();
@@ -251,47 +252,102 @@ async function logout() {
           const profiles = await request("/api/discover", {
             headers: {Authorization: `Bearer ${token}`},
           });
-          if (!profiles.length) {
-            list.innerHTML = '<p class="muted">Aucun nouveau profil pour le moment.</p>';
-            return;
-          }
-          list.innerHTML = profiles.map((profile) => `
-            <article class="discover-card" data-profile-id="${profile.id}">
-              <div>
-                <strong>${escapeHtml(profile.name)}${profile.age ? `, ${profile.age}` : ""}</strong>
-                <span>${escapeHtml([profile.cycle, profile.filiere, profile.classe].filter(Boolean).join(" · "))}</span>
-                <p>${escapeHtml(profile.bio || "Profil sans bio pour le moment.")}</p>
-              </div>
-              <div class="discover-actions">
-                <button class="button secondary pass" type="button">Passer</button>
-                <button class="button primary like" type="button">J’aime</button>
-              </div>
-            </article>
-          `).join("");
-          list.querySelectorAll(".discover-card").forEach((card) => {
-            card.querySelector(".pass").addEventListener("click", () => submitSwipe(card, false));
-            card.querySelector(".like").addEventListener("click", () => submitSwipe(card, true));
-          });
+          discoverProfiles = profiles;
+          renderNextDiscoverCard();
         } catch (error) {
           list.innerHTML = `<p class="error">${escapeHtml(error.message)}</p>`;
         }
       }
 
+      function renderNextDiscoverCard() {
+        const list = document.querySelector("#discover-list");
+        if (!list) return;
+        if (!discoverProfiles.length) {
+          list.innerHTML = '<p class="muted">Tu as parcouru tous les profils disponibles pour le moment.</p>';
+          return;
+        }
+        const profile = discoverProfiles[0];
+        const initials = profile.name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
+        list.innerHTML = `
+          <div class="card-stack">
+            <article class="discover-card" data-profile-id="${profile.id}">
+              <div class="profile-visual">
+                <img src="/static/assets/campus-connect.svg" alt="">
+                <span class="profile-initials">${escapeHtml(initials)}</span>
+                <div class="profile-caption">
+                  <strong>${escapeHtml(profile.name)}${profile.age ? `, ${profile.age}` : ""}</strong>
+                  <span>${escapeHtml([profile.cycle, profile.filiere, profile.classe].filter(Boolean).join(" · "))}</span>
+                </div>
+              </div>
+              <div class="profile-details">
+                <p>${escapeHtml(profile.bio || "Profil sans bio pour le moment.")}</p>
+                <span>${escapeHtml(profile.interests.join(" · ") || "Aucun centre d’intérêt renseigné")}</span>
+              </div>
+            </article>
+            <div class="discover-actions">
+              <button class="round-action pass" type="button" aria-label="Passer">×</button>
+              <button class="round-action like" type="button" aria-label="J’aime">♥</button>
+            </div>
+          </div>
+        `;
+        const card = list.querySelector(".discover-card");
+        list.querySelector(".pass").addEventListener("click", () => submitSwipe(card, false));
+        list.querySelector(".like").addEventListener("click", () => submitSwipe(card, true));
+        attachSwipe(card);
+      }
+
+      function attachSwipe(card) {
+        let startX = 0;
+        let currentX = 0;
+        let dragging = false;
+        card.addEventListener("pointerdown", (event) => {
+          dragging = true;
+          startX = event.clientX;
+          card.setPointerCapture(event.pointerId);
+          card.classList.add("dragging");
+        });
+        card.addEventListener("pointermove", (event) => {
+          if (!dragging) return;
+          currentX = event.clientX - startX;
+          card.style.transform = `translateX(${currentX}px) rotate(${currentX / 18}deg)`;
+        });
+        card.addEventListener("pointerup", () => {
+          if (!dragging) return;
+          dragging = false;
+          card.classList.remove("dragging");
+          if (Math.abs(currentX) >= 100) {
+            submitSwipe(card, currentX > 0);
+          } else {
+            card.style.transform = "";
+          }
+          currentX = 0;
+        });
+      }
+
       async function submitSwipe(card, liked) {
         const token = localStorage.getItem("bc_connect_token");
         const targetId = Number(card.dataset.profileId);
-        card.remove();
+        card.classList.add(liked ? "swipe-right" : "swipe-left");
         try {
           const result = await request("/api/swipe", {
             method: "POST",
             headers: {Authorization: `Bearer ${token}`},
             body: JSON.stringify({target_id: targetId, liked}),
           });
-          if (result.matched) setMessage("C’est un match ! Vous vous êtes choisis mutuellement.");
+          discoverProfiles = discoverProfiles.filter((profile) => profile.id !== targetId);
+          if (result.matched) {
+            document.querySelector("#match-modal").hidden = false;
+          }
+          setTimeout(renderNextDiscoverCard, 220);
         } catch (error) {
+          card.classList.remove("swipe-right", "swipe-left");
           setMessage(error.message, true);
         }
       }
+
+      document.querySelector("#close-match").addEventListener("click", () => {
+        document.querySelector("#match-modal").hidden = true;
+      });
     }
   }
   localStorage.removeItem("bc_connect_token");
