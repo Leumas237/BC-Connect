@@ -43,6 +43,9 @@ create table if not exists profiles (
     interests text not null default '[]',
     intent text not null default 'les_deux',
     age integer,
+    instagram text not null default '',
+    snapchat text not null default '',
+    whatsapp text not null default '',
     invisible integer not null default 0,
     updated_at text not null default current_timestamp
 );
@@ -75,6 +78,14 @@ def initialize_database() -> None:
     with sqlite3.connect(database_path()) as connection:
         connection.execute("pragma foreign_keys = on")
         connection.executescript(SCHEMA)
+        profile_columns = {
+            row[1] for row in connection.execute("pragma table_info(profiles)").fetchall()
+        }
+        for column in ("instagram", "snapchat", "whatsapp"):
+            if column not in profile_columns:
+                connection.execute(
+                    f"alter table profiles add column {column} text not null default ''"
+                )
 
 
 @contextmanager

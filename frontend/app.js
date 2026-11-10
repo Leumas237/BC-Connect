@@ -85,6 +85,9 @@ function showAccount(user) {
           <label>Classe<input name="classe" maxlength="120"></label>
           <label>Centres d’intérêt<input name="interests" placeholder="sport, musique, entrepreneuriat"></label>
           <label>Âge<input name="age" type="number" min="15" max="80"></label>
+          <label>Instagram<input name="instagram" maxlength="160" placeholder="https://instagram.com/..."></label>
+          <label>Snapchat<input name="snapchat" maxlength="160" placeholder="Ton identifiant ou lien"></label>
+          <label>WhatsApp<input name="whatsapp" maxlength="160" placeholder="https://wa.me/..."></label>
           <label>Intention
             <select name="intent">
               <option value="les_deux">Amis et couple</option>
@@ -98,6 +101,10 @@ function showAccount(user) {
         <section class="discovery">
           <h3>Découvrir la communauté</h3>
           <div id="discover-list"><p class="muted">Chargement des profils...</p></div>
+        </section>
+        <section class="matches">
+          <h3>Mes matchs</h3>
+          <div id="matches-list"><p class="muted">Chargement des matchs...</p></div>
         </section>
       `
       : user.kyi_submitted
@@ -121,6 +128,7 @@ function showAccount(user) {
   if (user.approved) {
     loadProfile();
     loadDiscover();
+    loadMatches();
   }
 }
 
@@ -204,7 +212,7 @@ async function logout() {
         });
         const profileForm = document.querySelector("#profile-form");
         if (!profileForm) return;
-        for (const field of ["bio", "cycle", "filiere", "classe", "intent"]) {
+        for (const field of ["bio", "cycle", "filiere", "classe", "intent", "instagram", "snapchat", "whatsapp"]) {
           profileForm.elements[field].value = profile[field] || "";
         }
         profileForm.elements.interests.value = profile.interests.join(", ");
@@ -228,6 +236,9 @@ async function logout() {
         intent: profileForm.elements.intent.value,
         age: profileForm.elements.age.value ? Number(profileForm.elements.age.value) : null,
         invisible: profileForm.elements.invisible.checked,
+        instagram: profileForm.elements.instagram.value,
+        snapchat: profileForm.elements.snapchat.value,
+        whatsapp: profileForm.elements.whatsapp.value,
       };
       const button = profileForm.querySelector("button");
       button.disabled = true;
@@ -242,6 +253,43 @@ async function logout() {
         setMessage(error.message, true);
       } finally {
         button.disabled = false;
+      }
+
+      function socialLink(label, value) {
+        if (!value) return "";
+        const url = value.startsWith("http://") || value.startsWith("https://") ? value : "";
+        return url
+          ? `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${label}</a>`
+          : `<span>${label}: ${escapeHtml(value)}</span>`;
+      }
+
+      async function loadMatches() {
+        const list = document.querySelector("#matches-list");
+        if (!list) return;
+        const token = localStorage.getItem("bc_connect_token");
+        try {
+          const matches = await request("/api/matches", {
+            headers: {Authorization: `Bearer ${token}`},
+          });
+          if (!matches.length) {
+            list.innerHTML = '<p class="muted">Tes matchs apparaîtront ici.</p>';
+            return;
+          }
+          list.innerHTML = matches.map((match) => `
+            <article class="match-card">
+              <strong>${escapeHtml(match.name)}</strong>
+              <span>${escapeHtml([match.cycle, match.filiere, match.classe].filter(Boolean).join(" · "))}</span>
+              <p>${escapeHtml(match.bio || "Aucune bio.")}</p>
+              <div class="social-links">
+                ${socialLink("Instagram", match.instagram)}
+                ${socialLink("Snapchat", match.snapchat)}
+                ${socialLink("WhatsApp", match.whatsapp)}
+              </div>
+            </article>
+          `).join("");
+        } catch (error) {
+          list.innerHTML = `<p class="error">${escapeHtml(error.message)}</p>`;
+        }
       }
 
       async function loadDiscover() {

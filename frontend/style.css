@@ -49,6 +49,14 @@ h2 { font: 700 1.75rem "Space Grotesk", sans-serif; }
 .checkbox input { width: auto; }
 .discovery { margin-top: 2rem; text-align: left; }
 .discovery h3 { font: 700 1.25rem "Space Grotesk", sans-serif; }
+.matches { margin-top: 2rem; text-align: left; }
+.matches h3 { font: 700 1.25rem "Space Grotesk", sans-serif; }
+.match-card { display: grid; gap: .45rem; margin-top: 1rem; padding: 1rem; border: 1px solid var(--border); border-radius: 1rem; background: rgba(15, 23, 42, .65); }
+.match-card span { color: var(--accent); font-size: .85rem; }
+.match-card p { margin: .25rem 0; color: var(--muted); }
+.social-links { display: flex; flex-wrap: wrap; gap: .65rem; }
+.social-links a, .social-links span { color: var(--text); font-size: .85rem; }
+.social-links a { text-decoration: underline; text-decoration-color: var(--accent); }
 .card-stack { max-width: 430px; margin: 1rem auto 0; }
 .discover-card { overflow: hidden; border: 1px solid var(--border); border-radius: 1.5rem; background: rgba(15, 23, 42, .75); box-shadow: 0 20px 60px rgba(0, 0, 0, .28); touch-action: pan-y; transition: transform .22s ease, opacity .22s ease; }
 .discover-card.dragging { transition: none; cursor: grabbing; }

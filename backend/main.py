@@ -51,6 +51,9 @@ class ProfilePayload(BaseModel):
     interests: list[str] = Field(default_factory=list, max_length=12)
     intent: str = Field(default="les_deux", pattern="^(amis|couple|les_deux)$")
     age: int | None = Field(default=None, ge=15, le=80)
+    instagram: str = Field(default="", max_length=160)
+    snapchat: str = Field(default="", max_length=160)
+    whatsapp: str = Field(default="", max_length=160)
     invisible: bool = False
 
 
@@ -141,6 +144,9 @@ def get_profile(user=Depends(current_user)):
             "interests": [],
             "intent": "les_deux",
             "age": None,
+            "instagram": "",
+            "snapchat": "",
+            "whatsapp": "",
             "invisible": False,
         }
     return {
@@ -151,6 +157,9 @@ def get_profile(user=Depends(current_user)):
         "interests": json.loads(profile["interests"]),
         "intent": profile["intent"],
         "age": profile["age"],
+        "instagram": profile["instagram"],
+        "snapchat": profile["snapchat"],
+        "whatsapp": profile["whatsapp"],
         "invisible": bool(profile["invisible"]),
     }
 
@@ -161,8 +170,8 @@ def update_profile(payload: ProfilePayload, user=Depends(approved_user)):
     with get_db() as db:
         db.execute(
             """
-            insert into profiles(user_id, bio, cycle, filiere, classe, interests, intent, age, invisible)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            insert into profiles(user_id, bio, cycle, filiere, classe, interests, intent, age, instagram, snapchat, whatsapp, invisible)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(user_id) do update set
                 bio = excluded.bio,
                 cycle = excluded.cycle,
@@ -171,6 +180,9 @@ def update_profile(payload: ProfilePayload, user=Depends(approved_user)):
                 interests = excluded.interests,
                 intent = excluded.intent,
                 age = excluded.age,
+                instagram = excluded.instagram,
+                snapchat = excluded.snapchat,
+                whatsapp = excluded.whatsapp,
                 invisible = excluded.invisible,
                 updated_at = current_timestamp
             """,
@@ -183,6 +195,9 @@ def update_profile(payload: ProfilePayload, user=Depends(approved_user)):
                 json.dumps(interests, ensure_ascii=False),
                 payload.intent,
                 payload.age,
+                payload.instagram.strip(),
+                payload.snapchat.strip(),
+                payload.whatsapp.strip(),
                 int(payload.invisible),
             ),
         )
@@ -271,7 +286,8 @@ def matches(user=Depends(approved_user)):
     with get_db() as db:
         rows = db.execute(
             """
-            select u.id, u.name, p.bio, p.cycle, p.filiere, p.classe, m.created_at
+            select u.id, u.name, p.bio, p.cycle, p.filiere, p.classe,
+                   p.instagram, p.snapchat, p.whatsapp, m.created_at
             from matches m
             join users u on u.id = case when m.user_a = ? then m.user_b else m.user_a end
             left join profiles p on p.user_id = u.id
