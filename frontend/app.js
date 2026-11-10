@@ -69,9 +69,23 @@ function showAccount(user) {
   account.innerHTML = `
     <p>Bienvenue, <strong>${escapeHtml(user.name)}</strong>.</p>
     <p class="muted">${escapeHtml(user.email)}</p>
+    ${user.kyi_submitted
+      ? `<p class="muted">Dossier étudiant soumis. Il est en attente de validation.</p>`
+      : `
+        <form id="kyi-form" class="kyi-form">
+          <h3>Vérifier mon identité étudiante</h3>
+          <p class="muted">Ta carte est stockée hors des fichiers publics et consultable uniquement par un administrateur.</p>
+          <label>Nom complet officiel<input name="full_name" required maxlength="160"></label>
+          <label>Date de naissance<input name="birthdate" type="date" required></label>
+          <label>Classe<input name="classe" required maxlength="120"></label>
+          <label>Carte étudiante (5 Mo maximum)<input name="card" type="file" accept="image/jpeg,image/png,image/webp" required></label>
+          <button class="button primary" type="submit">Envoyer mon dossier</button>
+        </form>
+      `}
     <button id="logout" class="button secondary" type="button">Se déconnecter</button>
   `;
   account.querySelector("#logout").addEventListener("click", logout);
+  account.querySelector("#kyi-form")?.addEventListener("submit", submitKyi);
 }
 
 function escapeHtml(value) {
@@ -122,6 +136,29 @@ async function logout() {
   const token = localStorage.getItem("bc_connect_token");
   if (token) {
     await request("/api/logout", {method: "POST", headers: {Authorization: `Bearer ${token}`}});
+  }
+
+  async function submitKyi(event) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const token = localStorage.getItem("bc_connect_token");
+    const button = event.currentTarget.querySelector("button");
+    button.disabled = true;
+    try {
+      const response = await fetch("/api/kyi", {
+        method: "POST",
+        headers: {Authorization: `Bearer ${token}`},
+        body: formData,
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.detail || "Impossible d'envoyer le dossier.");
+      setMessage("Dossier étudiant envoyé. Il est maintenant en attente de validation.");
+      const user = await request("/api/me", {headers: {Authorization: `Bearer ${token}`}});
+      showAccount(user);
+    } catch (error) {
+      setMessage(error.message, true);
+      button.disabled = false;
+    }
   }
   localStorage.removeItem("bc_connect_token");
   form.hidden = false;

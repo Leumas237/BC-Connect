@@ -1,17 +1,21 @@
 import re
+import secrets
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .auth import create_session, current_user, hash_password, verify_password
+from .auth import create_session, current_admin, current_user, hash_password, verify_password
 from .config import settings
 from .db import get_db, initialize_database
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+KYI_DIR = settings.data_dir / "kyi"
+MAX_KYI_SIZE = 5 * 1024 * 1024
+ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 
 app = FastAPI(title=settings.app_name)
 
@@ -25,6 +29,10 @@ class RegisterPayload(BaseModel):
 class LoginPayload(BaseModel):
     email: str
     password: str
+
+
+class KyiDecision(BaseModel):
+    approved: bool
 
 
 @app.on_event("startup")
@@ -82,13 +90,95 @@ def login(payload: LoginPayload):
 
 @app.get("/api/me")
 def me(user=Depends(current_user)):
+    with get_db() as db:
+        kyi_submitted = db.execute(
+            "select 1 from kyi where user_id = ?", (user["id"],)
+        ).fetchone() is not None
     return {
         "id": user["id"],
         "email": user["email"],
         "name": user["name"],
         "is_admin": bool(user["is_admin"]),
         "approved": bool(user["approved"]),
+        "kyi_submitted": kyi_submitted,
     }
+
+
+@app.post("/api/kyi", status_code=status.HTTP_201_CREATED)
+async def submit_kyi(
+    full_name: str = Form(..., min_length=2, max_length=160),
+    birthdate: str = Form(...),
+    classe: str = Form(..., min_length=1, max_length=120),
+    card: UploadFile = File(...),
+    user=Depends(current_user),
+):
+    if card.content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(status_code=400, detail="La carte doit être une image JPG, PNG ou WEBP.")
+    content = await card.read(MAX_KYI_SIZE + 1)
+    if len(content) > MAX_KYI_SIZE:
+        raise HTTPException(status_code=413, detail="La carte ne doit pas dépasser 5 Mo.")
+    if not content:
+        raise HTTPException(status_code=400, detail="Le fichier de carte est vide.")
+
+    KYI_DIR.mkdir(parents=True, exist_ok=True)
+    suffix = Path(card.filename or "").suffix.lower()
+    if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
+        suffix = ".jpg"
+    filename = f"{user['id']}-{secrets.token_hex(12)}{suffix}"
+    destination = KYI_DIR / filename
+    destination.write_bytes(content)
+
+    with get_db() as db:
+        previous = db.execute("select card_path from kyi where user_id = ?", (user["id"],)).fetchone()
+        db.execute(
+            """
+            insert into kyi(user_id, full_name, birthdate, classe, card_path)
+            values (?, ?, ?, ?, ?)
+            on conflict(user_id) do update set
+                full_name = excluded.full_name,
+                birthdate = excluded.birthdate,
+                classe = excluded.classe,
+                card_path = excluded.card_path,
+                submitted_at = current_timestamp
+            """,
+            (user["id"], full_name.strip(), birthdate.strip(), classe.strip(), filename),
+        )
+    if previous and previous["card_path"] != filename:
+        old_file = KYI_DIR / previous["card_path"]
+        if old_file.exists():
+            old_file.unlink()
+    return {"ok": True, "kyi_submitted": True}
+
+
+@app.get("/api/admin/kyi")
+def pending_kyi(user=Depends(current_admin)):
+    with get_db() as db:
+        rows = db.execute(
+            """
+            select k.user_id, k.full_name, k.birthdate, k.classe, k.submitted_at, u.email
+            from kyi k join users u on u.id = k.user_id
+            where u.approved = 0 and u.banned = 0
+            order by k.submitted_at asc
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.post("/api/admin/kyi/{user_id}/decision")
+def decide_kyi(user_id: int, payload: KyiDecision, user=Depends(current_admin)):
+    with get_db() as db:
+        target = db.execute("select id from users where id = ?", (user_id,)).fetchone()
+        if target is None:
+            raise HTTPException(status_code=404, detail="Utilisateur introuvable.")
+        if payload.approved:
+            db.execute("update users set approved = 1 where id = ?", (user_id,))
+        else:
+            db.execute("delete from users where id = ?", (user_id,))
+    if not payload.approved:
+        card_files = list(KYI_DIR.glob(f"{user_id}-*"))
+        for card_file in card_files:
+            card_file.unlink(missing_ok=True)
+    return {"ok": True, "approved": payload.approved}
 
 
 @app.post("/api/logout")

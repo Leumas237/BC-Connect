@@ -24,6 +24,15 @@ create table if not exists sessions (
     user_id integer not null references users(id) on delete cascade,
     created_at text not null default current_timestamp
 );
+
+create table if not exists kyi (
+    user_id integer primary key references users(id) on delete cascade,
+    full_name text not null,
+    birthdate text not null,
+    classe text not null,
+    card_path text not null,
+    submitted_at text not null default current_timestamp
+);
 """
 
 
