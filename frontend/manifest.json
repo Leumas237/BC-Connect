@@ -5,5 +5,19 @@
   "display": "standalone",
   "background_color": "#0F172A",
   "theme_color": "#0F172A",
-  "description": "La communauté étudiante de l'IUT-FV de Bandjoun"
+  "description": "La communauté étudiante de l'IUT-FV de Bandjoun",
+  "icons": [
+    {
+      "src": "/static/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
 }

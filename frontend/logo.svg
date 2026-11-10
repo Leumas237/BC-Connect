@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title>BC Connect</title>
+  <rect width="512" height="512" rx="112" fill="#0F172A"/>
+  <path d="M151 171h210M151 341h210M171 151v210M341 151v210" stroke="#FF2A54" stroke-width="24" stroke-linecap="round" opacity=".8"/>
+  <circle cx="151" cy="171" r="52" fill="#FF2A54"/>
+  <circle cx="361" cy="171" r="52" fill="#fff"/>
+  <circle cx="151" cy="341" r="52" fill="#fff"/>
+  <circle cx="361" cy="341" r="52" fill="#FF2A54"/>
+  <path d="M256 213c-38-48-105-20-105 32 0 57 105 116 105 116s105-59 105-116c0-52-67-80-105-32Z" fill="#FF2A54" stroke="#fff" stroke-width="12"/>
+</svg>

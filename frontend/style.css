@@ -18,7 +18,8 @@ body {
 }
 .shell { max-width: 1120px; margin: auto; padding: 1.25rem; }
 .nav { display: flex; justify-content: space-between; align-items: center; padding: .5rem 0; }
-.brand { color: var(--text); font: 700 1.35rem "Space Grotesk", sans-serif; text-decoration: none; }
+.brand { display: inline-flex; align-items: center; gap: .6rem; color: var(--text); font: 700 1.35rem "Space Grotesk", sans-serif; text-decoration: none; }
+.brand img { width: 2rem; height: 2rem; border-radius: .6rem; }
 .campus { color: var(--muted); font-size: .9rem; }
 .hero { display: grid; justify-items: center; text-align: center; padding: 7rem 0 6rem; }
 .eyebrow { color: var(--accent); font-weight: 700; }
