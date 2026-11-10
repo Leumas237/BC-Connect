@@ -11,6 +11,7 @@ const message = document.querySelector("#auth-message");
 const toggle = document.querySelector("#toggle-auth");
 const account = document.querySelector("#account");
 const installButton = document.querySelector("#install-app");
+const sectionMenu = document.querySelector("#section-menu");
 
 let signupMode = true;
 let deferredInstallPrompt;
@@ -27,6 +28,10 @@ installButton.addEventListener("click", async () => {
   await deferredInstallPrompt.userChoice;
   deferredInstallPrompt = null;
   installButton.hidden = true;
+});
+
+sectionMenu.addEventListener("change", () => {
+  document.querySelector(sectionMenu.value)?.scrollIntoView({behavior: "smooth"});
 });
 
 function setMessage(text, isError = false) {

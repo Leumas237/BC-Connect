@@ -13,7 +13,15 @@
     <main class="shell">
       <nav class="nav">
         <a class="brand" href="/"><img src="/static/icons/icon-192.png" alt="">BC Connect</a>
-        <span class="campus">IUT-FV · Bandjoun</span>
+        <div class="nav-actions">
+          <span class="campus">IUT-FV · Bandjoun</span>
+          <select id="section-menu" aria-label="Navigation">
+            <option value="#accueil">Accueil</option>
+            <option value="#concept">Communauté</option>
+            <option value="#auth">Compte</option>
+          </select>
+          <button id="install-app" class="install-link" type="button" hidden>Installer l’application</button>
+        </div>
       </nav>
       <section class="hero">
         <img class="hero-art" src="/static/assets/campus-connect.svg" alt="Étudiants connectés sur le campus">
@@ -55,11 +63,6 @@
         <button id="toggle-auth" class="text-button" type="button">J'ai déjà un compte</button>
         <div id="account" hidden></div>
       </section>
-      <nav class="bottom-nav" aria-label="Navigation principale">
-        <a class="active" href="#accueil">Accueil</a>
-        <a href="#concept">Communauté</a>
-        <button id="install-app" type="button" hidden>Installer</button>
-      </nav>
     </main>
     <script src="/static/app.js"></script>
   </body>
