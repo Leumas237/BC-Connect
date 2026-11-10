@@ -33,9 +33,25 @@
         <article class="card"><strong>Toutes les filières</strong><span>DUT, BTS, Licences et Masters réunis dans une même communauté.</span></article>
       </section>
       <section id="auth" class="auth card">
-        <h2>Le socle est prêt</h2>
-        <p>L'inscription, la connexion et les sessions sécurisées arrivent dans la prochaine interface.</p>
-        <a class="button primary" href="/api/health">Vérifier l'API</a>
+        <h2 id="auth-title">Rejoindre BC Connect</h2>
+        <p id="auth-message">Crée ton compte étudiant pour commencer.</p>
+        <form id="auth-form">
+          <label>
+            Nom
+            <input id="name" name="name" autocomplete="name" required>
+          </label>
+          <label>
+            Email
+            <input id="email" name="email" type="email" autocomplete="email" required>
+          </label>
+          <label>
+            Mot de passe
+            <input id="password" name="password" type="password" minlength="8" autocomplete="new-password" required>
+          </label>
+          <button class="button primary" type="submit">Créer mon compte</button>
+        </form>
+        <button id="toggle-auth" class="text-button" type="button">J'ai déjà un compte</button>
+        <div id="account" hidden></div>
       </section>
     </main>
     <script src="/static/app.js"></script>

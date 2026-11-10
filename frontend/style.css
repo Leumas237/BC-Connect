@@ -36,4 +36,12 @@ h2 { font: 700 1.75rem "Space Grotesk", sans-serif; }
 .card span, .auth p { color: var(--muted); line-height: 1.6; }
 .auth { margin: 4rem 0; text-align: center; }
 .auth .button { display: inline-block; margin-top: .75rem; }
+form { display: grid; gap: 1rem; max-width: 420px; margin: 1.5rem auto 1rem; text-align: left; }
+label { display: grid; gap: .4rem; color: var(--muted); font-size: .9rem; }
+input { width: 100%; padding: .8rem 1rem; border: 1px solid var(--border); border-radius: .75rem; background: rgba(15, 23, 42, .8); color: var(--text); font: inherit; }
+form button { border: 0; cursor: pointer; font: inherit; }
+form button:disabled { cursor: wait; opacity: .6; }
+.text-button { border: 0; background: transparent; color: var(--muted); cursor: pointer; text-decoration: underline; }
+.muted { color: var(--muted); }
+.error { color: #ff9caf !important; }
 @media (max-width: 600px) { .campus { display: none; } .hero { padding: 5rem 0; } }
