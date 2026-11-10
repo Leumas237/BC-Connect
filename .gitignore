@@ -1,0 +1,8 @@
+.web/
+.states/
+__pycache__/
+*.py[cod]
+.env
+.venv/
+venv/
+
