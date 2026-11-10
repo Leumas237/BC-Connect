@@ -292,19 +292,45 @@ La recette minimale doit couvrir :
 - Dockerfile de lancement ;
 - endpoints `/api/health`, `/api/config`, `/api/register`, `/api/login`,
   `/api/me` et `/api/logout`.
+- gestion des photos de profil jusqu'à six fichiers ;
+- découverte, swipes, matchs et réseaux sociaux débloqués après match ;
+- signalements, bannissement et invalidation des sessions ;
+- WebSocket de notification de match ;
+- abonnement Web Push et envoi VAPID si les clés sont configurées ;
+- export et suppression du compte ;
+- politique de confidentialité accessible depuis l'application.
 
 ### Non inclus
 
-- parcours KYI ;
-- profils étudiants ;
-- filières et classes en base ;
-- découverte, likes, matchs et quota ;
-- signalements et modération ;
-- WebSocket ;
-- notifications push ;
-- tests automatisés et migrations avancées.
+- tests automatisés complets ;
+- migrations SQLite versionnées au-delà des migrations de compatibilité ;
+- génération et rotation automatisées des clés VAPID ;
+- validation juridique finale et désignation formelle du responsable du
+  traitement.
 
-## 12. Historique de la documentation
+## 12. Protection des données au Cameroun
+
+BC Connect traite notamment des données de compte, de profil, de photos et
+de vérification KYI. La page `/static/privacy.html` présente la politique de
+confidentialité de travail et les contrôles implémentés :
+
+- acceptation explicite de la politique à l'inscription ;
+- stockage des cartes étudiantes hors du répertoire statique ;
+- accès KYI limité aux administrateurs ;
+- export et suppression du compte ;
+- absence des réseaux sociaux dans la découverte ;
+- conservation des photos et du KYI dans `data/`, à sauvegarder et à purger
+  selon une durée définie par l'exploitant ;
+- consentement et documentation des sous-traitants avant tout transfert.
+
+La politique s'appuie sur la loi camerounaise n°2024/017 du 23 décembre 2024
+relative à la protection des données à caractère personnel et la loi
+n°2010/012 du 21 décembre 2010 relative à la cybersécurité et à la
+cybercriminalité. Le responsable du traitement doit compléter ses coordonnées,
+fixer la durée de conservation et faire valider le dispositif par un conseil
+juridique camerounais avant mise en production.
+
+## 13. Historique de la documentation
 
 Cette documentation est adaptée du `DevKit.txt` de SJDA-v3 et sert de
 contrat de conception pour BC Connect. Toute nouvelle fonctionnalité doit

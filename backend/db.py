@@ -15,6 +15,8 @@ create table if not exists users (
     is_admin integer not null default 0,
     approved integer not null default 0,
     banned integer not null default 0,
+    spam_strikes integer not null default 0,
+    policy_accepted_at text,
     created_at text not null default current_timestamp,
     last_seen text not null default current_timestamp
 );
@@ -75,6 +77,21 @@ create table if not exists reports (
     status text not null default 'pending',
     created_at text not null default current_timestamp
 );
+
+create table if not exists photos (
+    id integer primary key autoincrement,
+    user_id integer not null references users(id) on delete cascade,
+    filename text not null,
+    content_type text not null,
+    created_at text not null default current_timestamp
+);
+
+create table if not exists push_subs (
+    endpoint text primary key,
+    user_id integer not null references users(id) on delete cascade,
+    subscription_json text not null,
+    created_at text not null default current_timestamp
+);
 """
 
 
@@ -95,6 +112,15 @@ def initialize_database() -> None:
                 connection.execute(
                     f"alter table profiles add column {column} text not null default ''"
                 )
+        user_columns = {
+            row[1] for row in connection.execute("pragma table_info(users)").fetchall()
+        }
+        if "spam_strikes" not in user_columns:
+            connection.execute(
+                "alter table users add column spam_strikes integer not null default 0"
+            )
+        if "policy_accepted_at" not in user_columns:
+            connection.execute("alter table users add column policy_accepted_at text")
 
 
 @contextmanager

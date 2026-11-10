@@ -1,9 +1,12 @@
+import asyncio
+import json
+import os
 import re
 import secrets
-import json
+from datetime import datetime
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -22,16 +25,67 @@ from .db import get_db, initialize_database
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 KYI_DIR = settings.data_dir / "kyi"
+UPLOADS_DIR = settings.data_dir / "uploads"
 MAX_KYI_SIZE = 5 * 1024 * 1024
+MAX_PHOTO_SIZE = 5 * 1024 * 1024
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+active_sockets: dict[int, set[WebSocket]] = {}
+main_loop: asyncio.AbstractEventLoop | None = None
 
 app = FastAPI(title=settings.app_name)
+
+
+async def notify_user(user_id: int, event: dict) -> None:
+    sockets = list(active_sockets.get(user_id, set()))
+    for socket in sockets:
+        try:
+            await socket.send_json(event)
+        except Exception:
+            active_sockets.get(user_id, set()).discard(socket)
+
+
+def current_daily_likes(db, user_id: int) -> int:
+    row = db.execute(
+        """
+        select count(*) as count from swipes
+        where swiper_id = ? and liked = 1 and date(created_at) = date('now')
+        """,
+        (user_id,),
+    ).fetchone()
+    return int(row["count"])
+
+
+def send_push(user_id: int, payload: dict) -> None:
+    private_key = os.getenv("BC_VAPID_PRIVATE_KEY", "")
+    claims_email = os.getenv("BC_VAPID_CLAIMS_EMAIL", "")
+    if not private_key or not claims_email:
+        return
+    from pywebpush import WebPushException, webpush
+
+    with get_db() as db:
+        subscriptions = db.execute(
+            "select endpoint, subscription_json from push_subs where user_id = ?",
+            (user_id,),
+        ).fetchall()
+    for subscription in subscriptions:
+        try:
+            webpush(
+                subscription_info=json.loads(subscription["subscription_json"]),
+                data=json.dumps(payload),
+                vapid_private_key=private_key,
+                vapid_claims={"sub": claims_email},
+            )
+        except WebPushException as error:
+            if getattr(error, "response", None) is not None and error.response.status_code in (404, 410):
+                with get_db() as db:
+                    db.execute("delete from push_subs where endpoint = ?", (subscription["endpoint"],))
 
 
 class RegisterPayload(BaseModel):
     email: str
     password: str = Field(min_length=8)
     name: str = Field(min_length=1, max_length=120)
+    privacy_accepted: bool
 
 
 class LoginPayload(BaseModel):
@@ -71,8 +125,19 @@ class ReportDecision(BaseModel):
     action: str = Field(pattern="^(ban|dismiss)$")
 
 
+class PushSubscription(BaseModel):
+    endpoint: str
+    keys: dict[str, str] = Field(default_factory=dict)
+
+
+class DeleteAccountPayload(BaseModel):
+    password: str
+
+
 @app.on_event("startup")
-def startup() -> None:
+async def startup() -> None:
+    global main_loop
+    main_loop = asyncio.get_running_loop()
     initialize_database()
 
 
@@ -91,16 +156,28 @@ def register(payload: RegisterPayload):
     email = payload.email.strip().lower()
     if not EMAIL_RE.match(email):
         raise HTTPException(status_code=400, detail="Adresse email invalide.")
+    if not payload.privacy_accepted:
+        raise HTTPException(status_code=400, detail="La politique de confidentialité doit être acceptée.")
     password_hash, password_salt = hash_password(payload.password)
     is_admin = int(email in settings.admin_emails)
     with get_db() as db:
         try:
             cursor = db.execute(
                 """
-                insert into users(email, password_hash, password_salt, name, is_admin, approved)
-                values (?, ?, ?, ?, ?, ?)
+                insert into users(
+                    email, password_hash, password_salt, name, is_admin, approved, policy_accepted_at
+                )
+                values (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (email, password_hash, password_salt, payload.name.strip(), is_admin, is_admin),
+                (
+                    email,
+                    password_hash,
+                    password_salt,
+                    payload.name.strip(),
+                    is_admin,
+                    is_admin,
+                    datetime.utcnow().isoformat(),
+                ),
             )
         except Exception as exc:
             if "unique" in str(exc).lower():
@@ -130,6 +207,10 @@ def me(user=Depends(current_user)):
         kyi_submitted = db.execute(
             "select 1 from kyi where user_id = ?", (user["id"],)
         ).fetchone() is not None
+        daily_likes = current_daily_likes(db, user["id"])
+        photos = db.execute(
+            "select id from photos where user_id = ? order by id", (user["id"],)
+        ).fetchall()
     return {
         "id": user["id"],
         "email": user["email"],
@@ -137,6 +218,9 @@ def me(user=Depends(current_user)):
         "is_admin": bool(user["is_admin"]),
         "approved": bool(user["approved"]),
         "kyi_submitted": kyi_submitted,
+        "daily_likes": daily_likes,
+        "daily_like_limit": settings.daily_likes,
+        "photos": [{"id": photo["id"]} for photo in photos],
     }
 
 
@@ -144,6 +228,9 @@ def me(user=Depends(current_user)):
 def get_profile(user=Depends(current_user)):
     with get_db() as db:
         profile = db.execute("select * from profiles where user_id = ?", (user["id"],)).fetchone()
+        photos = db.execute(
+            "select id from photos where user_id = ? order by id", (user["id"],)
+        ).fetchall()
     if profile is None:
         return {
             "bio": "",
@@ -157,6 +244,7 @@ def get_profile(user=Depends(current_user)):
             "snapchat": "",
             "whatsapp": "",
             "invisible": False,
+            "photos": [{"id": photo["id"]} for photo in photos],
         }
     return {
         "bio": profile["bio"],
@@ -170,6 +258,7 @@ def get_profile(user=Depends(current_user)):
         "snapchat": profile["snapchat"],
         "whatsapp": profile["whatsapp"],
         "invisible": bool(profile["invisible"]),
+        "photos": [{"id": photo["id"]} for photo in photos],
     }
 
 
@@ -213,13 +302,78 @@ def update_profile(payload: ProfilePayload, user=Depends(approved_user)):
     return {"ok": True}
 
 
+@app.post("/api/profile/photo", status_code=status.HTTP_201_CREATED)
+async def upload_profile_photo(
+    photo: UploadFile = File(...),
+    user=Depends(approved_user),
+):
+    if photo.content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(status_code=400, detail="La photo doit être une image JPG, PNG ou WEBP.")
+    content = await photo.read(MAX_PHOTO_SIZE + 1)
+    if len(content) > MAX_PHOTO_SIZE:
+        raise HTTPException(status_code=413, detail="La photo ne doit pas dépasser 5 Mo.")
+    with get_db() as db:
+        count = db.execute(
+            "select count(*) as count from photos where user_id = ?", (user["id"],)
+        ).fetchone()["count"]
+        if count >= 6:
+            raise HTTPException(status_code=400, detail="Un profil ne peut pas contenir plus de 6 photos.")
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    suffix = Path(photo.filename or "").suffix.lower()
+    if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
+        suffix = ".jpg"
+    filename = f"{user['id']}-{secrets.token_hex(12)}{suffix}"
+    (UPLOADS_DIR / filename).write_bytes(content)
+    with get_db() as db:
+        cursor = db.execute(
+            "insert into photos(user_id, filename, content_type) values (?, ?, ?)",
+            (user["id"], filename, photo.content_type),
+        )
+    return {"id": cursor.lastrowid}
+
+
+@app.delete("/api/profile/photos/{photo_id}")
+def delete_profile_photo(photo_id: int, user=Depends(approved_user)):
+    with get_db() as db:
+        photo = db.execute(
+            "select filename from photos where id = ? and user_id = ?",
+            (photo_id, user["id"]),
+        ).fetchone()
+        if photo is None:
+            raise HTTPException(status_code=404, detail="Photo introuvable.")
+        db.execute("delete from photos where id = ?", (photo_id,))
+    path = UPLOADS_DIR / photo["filename"]
+    path.unlink(missing_ok=True)
+    return {"ok": True}
+
+
+@app.get("/api/profile/photo/{photo_id}")
+def get_profile_photo(photo_id: int, user=Depends(approved_user)):
+    from fastapi.responses import FileResponse
+
+    with get_db() as db:
+        photo = db.execute(
+            """
+            select p.filename, p.content_type, p.user_id
+            from photos p
+            join users u on u.id = p.user_id
+            where p.id = ? and u.approved = 1 and u.banned = 0
+            """,
+            (photo_id,),
+        ).fetchone()
+    if photo is None:
+        raise HTTPException(status_code=404, detail="Photo introuvable.")
+    return FileResponse(UPLOADS_DIR / photo["filename"], media_type=photo["content_type"])
+
+
 @app.get("/api/discover")
 def discover(user=Depends(approved_user)):
     with get_db() as db:
         rows = db.execute(
             """
             select u.id, u.name, p.bio, p.cycle, p.filiere, p.classe,
-                   p.interests, p.intent, p.age
+                   p.interests, p.intent, p.age,
+                   (select id from photos where user_id = u.id order by id limit 1) as photo_id
             from users u
             join profiles p on p.user_id = u.id
             where u.id != ?
@@ -246,6 +400,7 @@ def discover(user=Depends(approved_user)):
             "interests": json.loads(row["interests"]),
             "intent": row["intent"],
             "age": row["age"],
+            "photo_id": row["photo_id"],
         }
         for row in rows
     ]
@@ -255,6 +410,7 @@ def discover(user=Depends(approved_user)):
 def swipe(payload: SwipePayload, user=Depends(approved_user)):
     if payload.target_id == user["id"]:
         raise HTTPException(status_code=400, detail="Tu ne peux pas sélectionner ton propre profil.")
+    matched = False
     with get_db() as db:
         target = db.execute(
             "select id from users where id = ? and approved = 1 and banned = 0",
@@ -262,6 +418,23 @@ def swipe(payload: SwipePayload, user=Depends(approved_user)):
         ).fetchone()
         if target is None:
             raise HTTPException(status_code=404, detail="Profil indisponible.")
+        if payload.liked and current_daily_likes(db, user["id"]) >= settings.daily_likes:
+            db.execute("update users set spam_strikes = spam_strikes + 1 where id = ?", (user["id"],))
+            strikes = db.execute(
+                "select spam_strikes from users where id = ?", (user["id"],)
+            ).fetchone()["spam_strikes"]
+            if strikes >= settings.spam_strikes_ban:
+                db.execute("update users set banned = 1 where id = ?", (user["id"],))
+                db.execute("delete from sessions where user_id = ?", (user["id"],))
+            quota_message = (
+                "Compte suspendu pour dépassement répété du quota."
+                if strikes >= settings.spam_strikes_ban
+                else f"Quota quotidien atteint ({settings.daily_likes} likes)."
+            )
+        else:
+            quota_message = ""
+        if quota_message:
+            return {"ok": False, "matched": False, "quota_exceeded": True, "message": quota_message}
         db.execute(
             """
             insert into swipes(swiper_id, target_id, liked)
@@ -271,7 +444,6 @@ def swipe(payload: SwipePayload, user=Depends(approved_user)):
             """,
             (user["id"], payload.target_id, int(payload.liked)),
         )
-        matched = False
         if payload.liked:
             reciprocal = db.execute(
                 """
@@ -287,6 +459,15 @@ def swipe(payload: SwipePayload, user=Depends(approved_user)):
                     (user_a, user_b),
                 )
                 matched = True
+    if matched and main_loop is not None:
+        asyncio.create_task(notify_user(payload.target_id, {"type": "match"}))
+        asyncio.create_task(
+            asyncio.to_thread(
+                send_push,
+                payload.target_id,
+                {"title": "BC Connect", "body": "C’est un match !"},
+            )
+        )
     return {"ok": True, "matched": matched}
 
 
@@ -296,7 +477,9 @@ def matches(user=Depends(approved_user)):
         rows = db.execute(
             """
             select u.id, u.name, p.bio, p.cycle, p.filiere, p.classe,
-                   p.instagram, p.snapchat, p.whatsapp, m.created_at
+                   p.instagram, p.snapchat, p.whatsapp,
+                   (select id from photos where user_id = u.id order by id limit 1) as photo_id,
+                   m.created_at
             from matches m
             join users u on u.id = case when m.user_a = ? then m.user_b else m.user_a end
             left join profiles p on p.user_id = u.id
@@ -375,6 +558,96 @@ def decide_report(report_id: int, payload: ReportDecision, user=Depends(current_
     return {"ok": True, "status": "banned" if payload.action == "ban" else "dismissed"}
 
 
+@app.get("/api/account/export")
+def export_account(user=Depends(current_user)):
+    with get_db() as db:
+        profile = db.execute("select * from profiles where user_id = ?", (user["id"],)).fetchone()
+        kyi = db.execute(
+            "select full_name, birthdate, classe, submitted_at from kyi where user_id = ?",
+            (user["id"],),
+        ).fetchone()
+        photos = db.execute(
+            "select id, created_at from photos where user_id = ?", (user["id"],)
+        ).fetchall()
+    return {
+        "account": {
+            "id": user["id"],
+            "email": user["email"],
+            "name": user["name"],
+            "created_at": user["created_at"],
+        },
+        "profile": dict(profile) if profile else None,
+        "kyi": dict(kyi) if kyi else None,
+        "photos": [dict(photo) for photo in photos],
+    }
+
+
+@app.post("/api/account/delete")
+def delete_account(payload: DeleteAccountPayload, user=Depends(current_user)):
+    if not verify_password(payload.password, user["password_hash"], user["password_salt"]):
+        raise HTTPException(status_code=403, detail="Mot de passe incorrect.")
+    with get_db() as db:
+        db.execute("delete from users where id = ?", (user["id"],))
+    for folder in (KYI_DIR, UPLOADS_DIR):
+        for path in folder.glob(f"{user['id']}-*") if folder.exists() else []:
+            path.unlink(missing_ok=True)
+    return {"ok": True}
+
+
+@app.get("/api/push/key")
+def push_key():
+    return {"public_key": os.getenv("BC_VAPID_PUBLIC_KEY", "")}
+
+
+@app.post("/api/push/subscribe")
+def push_subscribe(subscription: PushSubscription, user=Depends(current_user)):
+    with get_db() as db:
+        db.execute(
+            """
+            insert into push_subs(endpoint, user_id, subscription_json)
+            values (?, ?, ?)
+            on conflict(endpoint) do update set
+                user_id = excluded.user_id,
+                subscription_json = excluded.subscription_json
+            """,
+            (subscription.endpoint, user["id"], subscription.model_dump_json()),
+        )
+    return {"ok": True}
+
+
+@app.post("/api/push/unsubscribe")
+def push_unsubscribe(subscription: PushSubscription, user=Depends(current_user)):
+    with get_db() as db:
+        db.execute(
+            "delete from push_subs where endpoint = ? and user_id = ?",
+            (subscription.endpoint, user["id"]),
+        )
+    return {"ok": True}
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket, token: str):
+    with get_db() as db:
+        user = db.execute(
+            """
+            select u.* from users u
+            join sessions s on s.user_id = u.id
+            where s.token = ?
+            """,
+            (token,),
+        ).fetchone()
+    if user is None or user["banned"]:
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+    active_sockets.setdefault(user["id"], set()).add(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        active_sockets.get(user["id"], set()).discard(websocket)
+
+
 @app.post("/api/kyi", status_code=status.HTTP_201_CREATED)
 async def submit_kyi(
     full_name: str = Form(..., min_length=2, max_length=160),
@@ -433,6 +706,20 @@ def pending_kyi(user=Depends(current_admin)):
             """
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+@app.get("/api/admin/kyi-card/{user_id}")
+def get_kyi_card(user_id: int, user=Depends(current_admin)):
+    from fastapi.responses import FileResponse
+
+    with get_db() as db:
+        row = db.execute("select card_path from kyi where user_id = ?", (user_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Carte KYI introuvable.")
+    path = KYI_DIR / row["card_path"]
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Fichier KYI introuvable.")
+    return FileResponse(path)
 
 
 @app.post("/api/admin/kyi/{user_id}/decision")

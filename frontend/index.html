@@ -58,6 +58,10 @@
             Mot de passe
             <input id="password" name="password" type="password" minlength="8" autocomplete="new-password" required>
           </label>
+          <label class="checkbox">
+            <input id="privacy-accepted" name="privacy_accepted" type="checkbox" required>
+            <span>J’accepte la <a href="/static/privacy.html" target="_blank" rel="noreferrer">politique de confidentialité</a>.</span>
+          </label>
           <button class="button primary" type="submit">Créer mon compte</button>
         </form>
         <button id="toggle-auth" class="text-button" type="button">J'ai déjà un compte</button>
@@ -71,6 +75,7 @@
           <button id="close-match" class="button primary" type="button">Continuer</button>
         </div>
       </div>
+      <footer><a href="/static/privacy.html">Confidentialité et données personnelles</a></footer>
     </main>
     <script src="/static/app.js"></script>
   </body>

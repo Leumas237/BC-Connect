@@ -6,6 +6,7 @@ const form = document.querySelector("#auth-form");
 const nameInput = document.querySelector("#name");
 const emailInput = document.querySelector("#email");
 const passwordInput = document.querySelector("#password");
+const privacyInput = document.querySelector("#privacy-accepted");
 const title = document.querySelector("#auth-title");
 const message = document.querySelector("#auth-message");
 const toggle = document.querySelector("#toggle-auth");
@@ -16,6 +17,7 @@ const sectionMenu = document.querySelector("#section-menu");
 let signupMode = true;
 let deferredInstallPrompt;
 let discoverProfiles = [];
+let socket;
 
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();
@@ -45,6 +47,8 @@ function setSignupMode(value) {
   title.textContent = signupMode ? "Rejoindre BC Connect" : "Se connecter";
   nameInput.closest("label").hidden = !signupMode;
   nameInput.required = signupMode;
+  privacyInput.closest("label").hidden = !signupMode;
+  privacyInput.required = signupMode;
   passwordInput.autocomplete = signupMode ? "new-password" : "current-password";
   form.querySelector("button[type=submit]").textContent = signupMode
     ? "Créer mon compte"
@@ -98,6 +102,13 @@ function showAccount(user) {
           <label class="checkbox"><input name="invisible" type="checkbox"> Masquer mon profil</label>
           <button class="button primary" type="submit">Enregistrer mon profil</button>
         </form>
+        <form id="photo-form" class="kyi-form">
+          <h3>Mes photos</h3>
+          <input name="photo" type="file" accept="image/jpeg,image/png,image/webp" required>
+          <button class="button secondary" type="submit">Ajouter une photo</button>
+          <div id="photo-list" class="photo-list"></div>
+        </form>
+        <button id="enable-push" class="text-button" type="button">Activer les notifications de match</button>
         <section class="discovery">
           <h3>Découvrir la communauté</h3>
           <div id="discover-list"><p class="muted">Chargement des profils...</p></div>
@@ -106,6 +117,13 @@ function showAccount(user) {
           <h3>Mes matchs</h3>
           <div id="matches-list"><p class="muted">Chargement des matchs...</p></div>
         </section>
+        ${user.is_admin ? `
+          <section class="admin-panel">
+            <h3>Modération</h3>
+            <div id="admin-kyi-list"><p class="muted">Chargement des dossiers KYI...</p></div>
+            <div id="admin-report-list"><p class="muted">Chargement des signalements...</p></div>
+          </section>
+        ` : ""}
       `
       : user.kyi_submitted
       ? `<p class="muted">Dossier étudiant soumis. Il est en attente de validation.</p>`
@@ -125,11 +143,15 @@ function showAccount(user) {
   account.querySelector("#logout").addEventListener("click", logout);
   account.querySelector("#kyi-form")?.addEventListener("submit", submitKyi);
   account.querySelector("#profile-form")?.addEventListener("submit", submitProfile);
+  account.querySelector("#photo-form")?.addEventListener("submit", submitPhoto);
   if (user.approved) {
     loadProfile();
     loadDiscover();
     loadMatches();
+    connectRealtime();
+    document.querySelector("#enable-push")?.addEventListener("click", setupPush);
   }
+  if (user.is_admin) loadAdmin();
 }
 
 function escapeHtml(value) {
@@ -158,7 +180,10 @@ async function submitAuth(event) {
       email: emailInput.value,
       password: passwordInput.value,
     };
-    if (signupMode) payload.name = nameInput.value;
+    if (signupMode) {
+      payload.name = nameInput.value;
+      payload.privacy_accepted = privacyInput.checked;
+    }
     const result = await request(signupMode ? "/api/register" : "/api/login", {
       method: "POST",
       body: JSON.stringify(payload),
@@ -177,9 +202,63 @@ async function submitAuth(event) {
 }
 
 async function logout() {
+  socket?.close();
+  socket = null;
   const token = localStorage.getItem("bc_connect_token");
   if (token) {
     await request("/api/logout", {method: "POST", headers: {Authorization: `Bearer ${token}`}});
+  }
+
+  function connectRealtime() {
+    const token = localStorage.getItem("bc_connect_token");
+    if (!token || socket) return;
+    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+    socket = new WebSocket(`${protocol}//${location.host}/ws?token=${encodeURIComponent(token)}`);
+    socket.addEventListener("open", () => {
+      socket.keepAlive = window.setInterval(() => socket.send("keep-alive"), 25000);
+    });
+    socket.addEventListener("message", (event) => {
+      const payload = JSON.parse(event.data);
+      if (payload.type === "match") {
+        document.querySelector("#match-modal").hidden = false;
+        loadMatches();
+      }
+    });
+    socket.addEventListener("close", () => {
+      if (socket?.keepAlive) window.clearInterval(socket.keepAlive);
+      socket = null;
+    });
+  }
+
+  function base64ToBytes(value) {
+    const padding = "=".repeat((4 - value.length % 4) % 4);
+    const raw = atob((value + padding).replace(/-/g, "+").replace(/_/g, "/"));
+    return Uint8Array.from(raw, (character) => character.charCodeAt(0));
+  }
+
+  async function setupPush() {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+      setMessage("Les notifications push ne sont pas disponibles sur ce navigateur.", true);
+      return;
+    }
+    const key = await request("/api/push/key");
+    if (!key.public_key) {
+      setMessage("Les notifications push ne sont pas encore configurées sur le serveur.", true);
+      return;
+    }
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") return;
+    const registration = await navigator.serviceWorker.ready;
+    const subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: base64ToBytes(key.public_key),
+    });
+    await request("/api/push/subscribe", {
+      method: "POST",
+      headers: {Authorization: `Bearer ${localStorage.getItem("bc_connect_token")}`},
+      body: JSON.stringify(subscription),
+    });
+    setMessage("Notifications de match activées.");
   }
 
   async function submitKyi(event) {
@@ -218,8 +297,71 @@ async function logout() {
         profileForm.elements.interests.value = profile.interests.join(", ");
         profileForm.elements.age.value = profile.age || "";
         profileForm.elements.invisible.checked = profile.invisible;
+        await loadPhotos(profile.photos || []);
       } catch (error) {
         setMessage(error.message, true);
+      }
+
+      async function loadPhotos(photos) {
+        const list = document.querySelector("#photo-list");
+        if (!list) return;
+        const token = localStorage.getItem("bc_connect_token");
+        list.innerHTML = "";
+        for (const photo of photos) {
+          const response = await fetch(`/api/profile/photo/${photo.id}`, {
+            headers: {Authorization: `Bearer ${token}`},
+          });
+          if (!response.ok) continue;
+          const imageUrl = URL.createObjectURL(await response.blob());
+          const wrapper = document.createElement("div");
+          wrapper.className = "photo-item";
+          wrapper.innerHTML = `<img src="${imageUrl}" alt="Photo de profil"><button type="button">Supprimer</button>`;
+          wrapper.querySelector("button").addEventListener("click", () => deletePhoto(photo.id, wrapper, imageUrl));
+          list.appendChild(wrapper);
+        }
+      }
+
+      async function submitPhoto(event) {
+        event.preventDefault();
+        const photoForm = event.currentTarget;
+        const file = photoForm.elements.photo.files[0];
+        if (!file) return;
+        const button = photoForm.querySelector("button");
+        button.disabled = true;
+        const token = localStorage.getItem("bc_connect_token");
+        const body = new FormData();
+        body.append("photo", file);
+        try {
+          const response = await fetch("/api/profile/photo", {
+            method: "POST",
+            headers: {Authorization: `Bearer ${token}`},
+            body,
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(payload.detail || "Impossible d’ajouter la photo.");
+          photoForm.reset();
+          const profile = await request("/api/profile", {headers: {Authorization: `Bearer ${token}`}});
+          await loadPhotos(profile.photos || []);
+          setMessage("Photo ajoutée.");
+        } catch (error) {
+          setMessage(error.message, true);
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      async function deletePhoto(photoId, wrapper, imageUrl) {
+        const token = localStorage.getItem("bc_connect_token");
+        const response = await fetch(`/api/profile/photos/${photoId}`, {
+          method: "DELETE",
+          headers: {Authorization: `Bearer ${token}`},
+        });
+        if (!response.ok) {
+          setMessage("Impossible de supprimer la photo.", true);
+          return;
+        }
+        URL.revokeObjectURL(imageUrl);
+        wrapper.remove();
       }
     }
 
@@ -309,6 +451,82 @@ async function logout() {
             loadMatches();
           } catch (error) {
             setMessage(error.message, true);
+          }
+
+          async function loadAdmin() {
+            const token = localStorage.getItem("bc_connect_token");
+            const kyiList = document.querySelector("#admin-kyi-list");
+            const reportList = document.querySelector("#admin-report-list");
+            try {
+              const [kyi, reports] = await Promise.all([
+                request("/api/admin/kyi", {headers: {Authorization: `Bearer ${token}`}}),
+                request("/api/admin/reports", {headers: {Authorization: `Bearer ${token}`}}),
+              ]);
+              kyiList.innerHTML = kyi.length ? kyi.map((item) => `
+                <article class="admin-item">
+                  <strong>${escapeHtml(item.full_name)}</strong>
+                  <span>${escapeHtml(item.email)} · ${escapeHtml(item.classe)}</span>
+                  <div>
+                    <button class="button secondary admin-kyi-card" data-id="${item.user_id}" type="button">Voir la carte</button>
+                    <button class="button primary admin-kyi-action" data-id="${item.user_id}" data-approved="true" type="button">Accepter</button>
+                    <button class="button secondary admin-kyi-action" data-id="${item.user_id}" data-approved="false" type="button">Refuser</button>
+                  </div>
+                </article>
+              `).join("") : '<p class="muted">Aucun dossier KYI en attente.</p>';
+              reportList.innerHTML = reports.length ? reports.map((item) => `
+                <article class="admin-item">
+                  <strong>Signalement #${item.id} · ${escapeHtml(item.status)}</strong>
+                  <span>${escapeHtml(item.reporter_email)} → ${escapeHtml(item.reported_email)}</span>
+                  <p>${escapeHtml(item.reason)}</p>
+                  ${item.status === "pending" ? `<button class="button secondary admin-report-action" data-id="${item.id}" data-action="ban" type="button">Bannir</button>
+                  <button class="button secondary admin-report-action" data-id="${item.id}" data-action="dismiss" type="button">Classer</button>` : ""}
+                </article>
+              `).join("") : '<p class="muted">Aucun signalement.</p>';
+              document.querySelectorAll(".admin-kyi-action").forEach((button) => {
+                button.addEventListener("click", () => decideKyi(Number(button.dataset.id), button.dataset.approved === "true"));
+              });
+              document.querySelectorAll(".admin-kyi-card").forEach((button) => {
+                button.addEventListener("click", () => viewKyiCard(Number(button.dataset.id)));
+              });
+              document.querySelectorAll(".admin-report-action").forEach((button) => {
+                button.addEventListener("click", () => decideReport(Number(button.dataset.id), button.dataset.action));
+              });
+            } catch (error) {
+              setMessage(error.message, true);
+            }
+
+            async function viewKyiCard(userId) {
+              const token = localStorage.getItem("bc_connect_token");
+              const response = await fetch(`/api/admin/kyi-card/${userId}`, {
+                headers: {Authorization: `Bearer ${token}`},
+              });
+              if (!response.ok) {
+                setMessage("Impossible de charger la carte KYI.", true);
+                return;
+              }
+              const url = URL.createObjectURL(await response.blob());
+              window.open(url, "_blank", "noopener,noreferrer");
+            }
+          }
+
+          async function decideKyi(userId, approved) {
+            const token = localStorage.getItem("bc_connect_token");
+            await request(`/api/admin/kyi/${userId}/decision`, {
+              method: "POST",
+              headers: {Authorization: `Bearer ${token}`},
+              body: JSON.stringify({approved}),
+            });
+            loadAdmin();
+          }
+
+          async function decideReport(reportId, action) {
+            const token = localStorage.getItem("bc_connect_token");
+            await request(`/api/admin/reports/${reportId}`, {
+              method: "POST",
+              headers: {Authorization: `Bearer ${token}`},
+              body: JSON.stringify({action}),
+            });
+            loadAdmin();
           }
         }
       }
