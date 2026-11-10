@@ -69,7 +69,33 @@ function showAccount(user) {
   account.innerHTML = `
     <p>Bienvenue, <strong>${escapeHtml(user.name)}</strong>.</p>
     <p class="muted">${escapeHtml(user.email)}</p>
-    ${user.kyi_submitted
+    ${user.approved
+      ? `
+        <form id="profile-form" class="kyi-form">
+          <h3>Mon profil étudiant</h3>
+          <label>Bio<textarea name="bio" maxlength="1000" rows="4"></textarea></label>
+          <label>Cycle
+            <select name="cycle">
+              <option value="">Choisir un cycle</option>
+              <option>DUT</option><option>BTS</option><option>Licence</option><option>Master</option>
+            </select>
+          </label>
+          <label>Filière<input name="filiere" maxlength="160"></label>
+          <label>Classe<input name="classe" maxlength="120"></label>
+          <label>Centres d’intérêt<input name="interests" placeholder="sport, musique, entrepreneuriat"></label>
+          <label>Âge<input name="age" type="number" min="15" max="80"></label>
+          <label>Intention
+            <select name="intent">
+              <option value="les_deux">Amis et couple</option>
+              <option value="amis">Amitié</option>
+              <option value="couple">Relation</option>
+            </select>
+          </label>
+          <label class="checkbox"><input name="invisible" type="checkbox"> Masquer mon profil</label>
+          <button class="button primary" type="submit">Enregistrer mon profil</button>
+        </form>
+      `
+      : user.kyi_submitted
       ? `<p class="muted">Dossier étudiant soumis. Il est en attente de validation.</p>`
       : `
         <form id="kyi-form" class="kyi-form">
@@ -86,6 +112,8 @@ function showAccount(user) {
   `;
   account.querySelector("#logout").addEventListener("click", logout);
   account.querySelector("#kyi-form")?.addEventListener("submit", submitKyi);
+  account.querySelector("#profile-form")?.addEventListener("submit", submitProfile);
+  if (user.approved) loadProfile();
 }
 
 function escapeHtml(value) {
@@ -158,6 +186,55 @@ async function logout() {
     } catch (error) {
       setMessage(error.message, true);
       button.disabled = false;
+    }
+
+    async function loadProfile() {
+      const token = localStorage.getItem("bc_connect_token");
+      try {
+        const profile = await request("/api/profile", {
+          headers: {Authorization: `Bearer ${token}`},
+        });
+        const profileForm = document.querySelector("#profile-form");
+        if (!profileForm) return;
+        for (const field of ["bio", "cycle", "filiere", "classe", "intent"]) {
+          profileForm.elements[field].value = profile[field] || "";
+        }
+        profileForm.elements.interests.value = profile.interests.join(", ");
+        profileForm.elements.age.value = profile.age || "";
+        profileForm.elements.invisible.checked = profile.invisible;
+      } catch (error) {
+        setMessage(error.message, true);
+      }
+    }
+
+    async function submitProfile(event) {
+      event.preventDefault();
+      const profileForm = event.currentTarget;
+      const token = localStorage.getItem("bc_connect_token");
+      const payload = {
+        bio: profileForm.elements.bio.value,
+        cycle: profileForm.elements.cycle.value,
+        filiere: profileForm.elements.filiere.value,
+        classe: profileForm.elements.classe.value,
+        interests: profileForm.elements.interests.value.split(",").map((item) => item.trim()).filter(Boolean),
+        intent: profileForm.elements.intent.value,
+        age: profileForm.elements.age.value ? Number(profileForm.elements.age.value) : null,
+        invisible: profileForm.elements.invisible.checked,
+      };
+      const button = profileForm.querySelector("button");
+      button.disabled = true;
+      try {
+        await request("/api/profile", {
+          method: "PUT",
+          headers: {Authorization: `Bearer ${token}`},
+          body: JSON.stringify(payload),
+        });
+        setMessage("Profil enregistré.");
+      } catch (error) {
+        setMessage(error.message, true);
+      } finally {
+        button.disabled = false;
+      }
     }
   }
   localStorage.removeItem("bc_connect_token");

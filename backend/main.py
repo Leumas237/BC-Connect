@@ -1,5 +1,6 @@
 import re
 import secrets
+import json
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
@@ -7,7 +8,14 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .auth import create_session, current_admin, current_user, hash_password, verify_password
+from .auth import (
+    approved_user,
+    create_session,
+    current_admin,
+    current_user,
+    hash_password,
+    verify_password,
+)
 from .config import settings
 from .db import get_db, initialize_database
 
@@ -33,6 +41,17 @@ class LoginPayload(BaseModel):
 
 class KyiDecision(BaseModel):
     approved: bool
+
+
+class ProfilePayload(BaseModel):
+    bio: str = Field(default="", max_length=1000)
+    cycle: str = Field(default="", max_length=80)
+    filiere: str = Field(default="", max_length=160)
+    classe: str = Field(default="", max_length=120)
+    interests: list[str] = Field(default_factory=list, max_length=12)
+    intent: str = Field(default="les_deux", pattern="^(amis|couple|les_deux)$")
+    age: int | None = Field(default=None, ge=15, le=80)
+    invisible: bool = False
 
 
 @app.on_event("startup")
@@ -102,6 +121,67 @@ def me(user=Depends(current_user)):
         "approved": bool(user["approved"]),
         "kyi_submitted": kyi_submitted,
     }
+
+
+@app.get("/api/profile")
+def get_profile(user=Depends(current_user)):
+    with get_db() as db:
+        profile = db.execute("select * from profiles where user_id = ?", (user["id"],)).fetchone()
+    if profile is None:
+        return {
+            "bio": "",
+            "cycle": "",
+            "filiere": "",
+            "classe": "",
+            "interests": [],
+            "intent": "les_deux",
+            "age": None,
+            "invisible": False,
+        }
+    return {
+        "bio": profile["bio"],
+        "cycle": profile["cycle"],
+        "filiere": profile["filiere"],
+        "classe": profile["classe"],
+        "interests": json.loads(profile["interests"]),
+        "intent": profile["intent"],
+        "age": profile["age"],
+        "invisible": bool(profile["invisible"]),
+    }
+
+
+@app.put("/api/profile")
+def update_profile(payload: ProfilePayload, user=Depends(approved_user)):
+    interests = [item.strip() for item in payload.interests if item.strip()]
+    with get_db() as db:
+        db.execute(
+            """
+            insert into profiles(user_id, bio, cycle, filiere, classe, interests, intent, age, invisible)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(user_id) do update set
+                bio = excluded.bio,
+                cycle = excluded.cycle,
+                filiere = excluded.filiere,
+                classe = excluded.classe,
+                interests = excluded.interests,
+                intent = excluded.intent,
+                age = excluded.age,
+                invisible = excluded.invisible,
+                updated_at = current_timestamp
+            """,
+            (
+                user["id"],
+                payload.bio.strip(),
+                payload.cycle.strip(),
+                payload.filiere.strip(),
+                payload.classe.strip(),
+                json.dumps(interests, ensure_ascii=False),
+                payload.intent,
+                payload.age,
+                int(payload.invisible),
+            ),
+        )
+    return {"ok": True}
 
 
 @app.post("/api/kyi", status_code=status.HTTP_201_CREATED)

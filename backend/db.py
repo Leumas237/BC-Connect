@@ -33,6 +33,19 @@ create table if not exists kyi (
     card_path text not null,
     submitted_at text not null default current_timestamp
 );
+
+create table if not exists profiles (
+    user_id integer primary key references users(id) on delete cascade,
+    bio text not null default '',
+    cycle text not null default '',
+    filiere text not null default '',
+    classe text not null default '',
+    interests text not null default '[]',
+    intent text not null default 'les_deux',
+    age integer,
+    invisible integer not null default 0,
+    updated_at text not null default current_timestamp
+);
 """
 
 
