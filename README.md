@@ -9,9 +9,10 @@ filières : entraide, affinités, vie de campus et rencontres. L'application
 reprend les principes fonctionnels de SJDA-v3, adaptés à l'identité et au
 contexte de l'IUT-FV.
 
-> **État actuel :** le dépôt démarre de zéro. Une première landing page
-> BC Connect est présente dans `bc_connect/`. Le backend, l'authentification,
-> la validation KYI, la découverte et la modération sont encore à construire.
+> **État actuel :** v0.1 livrable pour revue. Le socle FastAPI + SQLite +
+> PWA est fonctionnel, avec inscription, connexion, sessions et déconnexion.
+> La validation KYI, les profils, la découverte, les matchs et la modération
+> constituent les prochains lots.
 
 ## 1. Vision du produit
 
@@ -72,9 +73,9 @@ data/           # données persistantes, ignorées par Git
   vapid_private.pem
 ```
 
-Le premier squelette Reflex présent dans `bc_connect/` sert de maquette
-visuelle initiale. Il sera progressivement remplacé ou intégré au frontend
-PWA cible lorsque le backend sera mis en place.
+La version actuelle utilise directement le frontend PWA cible. Le backend
+expose déjà le socle d'authentification ; les fonctionnalités métier seront
+ajoutées par lots afin de pouvoir les relire et les valider séparément.
 
 ### Principes techniques
 
@@ -204,7 +205,7 @@ les photos, les dossiers KYI et les clés nécessaires aux notifications push.
 
 ## 8. Développement local
 
-La commande cible, une fois le backend installé, sera :
+Lancer la version actuelle :
 
 ```powershell
 python -m venv .venv
@@ -213,7 +214,18 @@ pip install -r requirements.txt
 uvicorn backend.main:app --reload --port 8000
 ```
 
-Puis ouvrir <http://localhost:8000>.
+Puis ouvrir <http://localhost:8000>. Le bouton « Vérifier l'API » et le
+formulaire d'inscription permettent de vérifier rapidement l'installation.
+
+Pour une base de test administrateur :
+
+```powershell
+$env:BC_ADMIN_EMAILS = "admin@example.com"
+uvicorn backend.main:app --reload --port 8000
+```
+
+Le compte créé avec cette adresse est administrateur et validé
+automatiquement. La validation KYI n'est pas encore implémentée dans v0.1.
 
 Pendant le développement frontend, penser à mettre à jour le numéro de
 cache dans `frontend/sw.js` après toute modification de `index.html`,
@@ -265,7 +277,34 @@ La recette minimale doit couvrir :
 9. suppression complète du compte ;
 10. accès refusé aux cartes KYI sans session administrateur.
 
-## 11. Historique de la documentation
+## 11. Périmètre de la v0.1
+
+### Inclus
+
+- landing page BC Connect ;
+- configuration par variables d'environnement ;
+- SQLite persistante dans `data/` ;
+- inscription avec validation basique de l'email ;
+- mot de passe PBKDF2-SHA256 ;
+- session Bearer opaque ;
+- connexion, récupération de compte et déconnexion ;
+- interface responsive et installable comme PWA ;
+- Dockerfile de lancement ;
+- endpoints `/api/health`, `/api/config`, `/api/register`, `/api/login`,
+  `/api/me` et `/api/logout`.
+
+### Non inclus
+
+- parcours KYI ;
+- profils étudiants ;
+- filières et classes en base ;
+- découverte, likes, matchs et quota ;
+- signalements et modération ;
+- WebSocket ;
+- notifications push ;
+- tests automatisés et migrations avancées.
+
+## 12. Historique de la documentation
 
 Cette documentation est adaptée du `DevKit.txt` de SJDA-v3 et sert de
 contrat de conception pour BC Connect. Toute nouvelle fonctionnalité doit
