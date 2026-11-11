@@ -1,4 +1,4 @@
-const CACHE = "bc-connect-v3";
+const CACHE = "bc-connect-v4";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll([

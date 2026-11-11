@@ -6,6 +6,7 @@ const form = document.querySelector("#auth-form");
 const nameInput = document.querySelector("#name");
 const emailInput = document.querySelector("#email");
 const passwordInput = document.querySelector("#password");
+const moderatorCodeInput = document.querySelector("#moderator-code");
 const privacyInput = document.querySelector("#privacy-accepted");
 const title = document.querySelector("#auth-title");
 const message = document.querySelector("#auth-message");
@@ -49,6 +50,7 @@ function setSignupMode(value) {
   nameInput.required = signupMode;
   privacyInput.closest("label").hidden = !signupMode;
   privacyInput.required = signupMode;
+  moderatorCodeInput.closest("label").hidden = !signupMode;
   passwordInput.autocomplete = signupMode ? "new-password" : "current-password";
   form.querySelector("button[type=submit]").textContent = signupMode
     ? "Créer mon compte"
@@ -76,6 +78,21 @@ function showAccount(user) {
     <p class="muted">${escapeHtml(user.email)}</p>
     ${user.approved
       ? `
+        <div class="account-tabs" role="tablist" aria-label="Espace communautaire">
+          <button class="account-tab active" data-account-tab="wall" type="button">Mon mur</button>
+          <button class="account-tab" data-account-tab="swipe" type="button">Swipe</button>
+          ${user.is_admin ? '<button class="account-tab" data-account-tab="moderation" type="button">Modération</button>' : ""}
+        </div>
+        <section class="account-view active" data-account-view="wall">
+          <form id="wall-form" class="kyi-form">
+            <h3>Partager sur mon mur</h3>
+            <textarea name="body" maxlength="2000" rows="4" placeholder="Une idée, une question ou une actualité du campus..."></textarea>
+            <input name="media" type="file" accept="image/jpeg,image/png,image/webp">
+            <button class="button primary" type="submit">Publier</button>
+          </form>
+          <div id="wall-list"><p class="muted">Chargement du mur...</p></div>
+        </section>
+        <section class="account-view" data-account-view="swipe" hidden>
         <form id="profile-form" class="kyi-form">
           <h3>Mon profil étudiant</h3>
           <label>Bio<textarea name="bio" maxlength="1000" rows="4"></textarea></label>
@@ -117,11 +134,32 @@ function showAccount(user) {
           <h3>Mes matchs</h3>
           <div id="matches-list"><p class="muted">Chargement des matchs...</p></div>
         </section>
+        </section>
         ${user.is_admin ? `
-          <section class="admin-panel">
-            <h3>Modération</h3>
-            <div id="admin-kyi-list"><p class="muted">Chargement des dossiers KYI...</p></div>
-            <div id="admin-report-list"><p class="muted">Chargement des signalements...</p></div>
+          <section class="account-view admin-panel" data-account-view="moderation" hidden>
+            <h3>Dashboard administrateur</h3>
+            <form id="moderator-code-form" class="moderator-code-form">
+              <label>Réinitialiser le code d’invitation modérateur<input name="code" type="password" minlength="8" required></label>
+              <button class="button secondary" type="submit">Enregistrer le code</button>
+            </form>
+            <div class="admin-tabs" role="tablist" aria-label="Sections administrateur">
+              <button class="admin-tab active" data-admin-tab="moderation" type="button">Modération</button>
+              <button class="admin-tab" data-admin-tab="stats" type="button">Stats</button>
+              <button class="admin-tab" data-admin-tab="activity" type="button">Activité</button>
+            </div>
+            <div class="admin-view active" data-admin-view="moderation">
+              <div id="admin-kyi-list"><p class="muted">Chargement des dossiers KYI...</p></div>
+              <div id="admin-report-list"><p class="muted">Chargement des signalements...</p></div>
+            </div>
+            <div class="admin-view" data-admin-view="stats" hidden>
+              <div id="admin-stats" class="stats-grid"><p class="muted">Chargement des statistiques...</p></div>
+            </div>
+            <div class="admin-view" data-admin-view="activity" hidden>
+              <div class="activity-actions">
+                <button id="export-activity" class="button secondary" type="button">Exporter le journal CSV</button>
+              </div>
+              <div id="admin-activity"><p class="muted">Chargement du journal...</p></div>
+            </div>
           </section>
         ` : ""}
       `
@@ -144,7 +182,19 @@ function showAccount(user) {
   account.querySelector("#kyi-form")?.addEventListener("submit", submitKyi);
   account.querySelector("#profile-form")?.addEventListener("submit", submitProfile);
   account.querySelector("#photo-form")?.addEventListener("submit", submitPhoto);
+  account.querySelector("#wall-form")?.addEventListener("submit", submitWallPost);
+  account.querySelector("#moderator-code-form")?.addEventListener("submit", saveModeratorCode);
   if (user.approved) {
+    account.querySelectorAll(".account-tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        account.querySelectorAll(".account-tab").forEach((item) => item.classList.toggle("active", item === tab));
+        account.querySelectorAll(".account-view").forEach((view) => {
+          view.hidden = view.dataset.accountView !== tab.dataset.accountTab;
+          view.classList.toggle("active", !view.hidden);
+        });
+      });
+    });
+    loadWall();
     loadProfile();
     loadDiscover();
     loadMatches();
@@ -152,6 +202,124 @@ function showAccount(user) {
     document.querySelector("#enable-push")?.addEventListener("click", setupPush);
   }
   if (user.is_admin) loadAdmin();
+}
+
+async function submitWallPost(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = new FormData(form);
+  const token = localStorage.getItem("bc_connect_token");
+  try {
+    const response = await fetch("/api/wall/posts", {
+      method: "POST",
+      headers: {Authorization: `Bearer ${token}`},
+      body: data,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.detail || "Publication impossible.");
+    form.reset();
+    await loadWall();
+  } catch (error) {
+    setMessage(error.message, true);
+  }
+}
+
+async function loadWall() {
+  const list = document.querySelector("#wall-list");
+  if (!list) return;
+  const token = localStorage.getItem("bc_connect_token");
+  try {
+    const posts = await request("/api/wall", {headers: {Authorization: `Bearer ${token}`}});
+    list.innerHTML = posts.length ? posts.map((post) => `
+      <article class="wall-post" data-post-id="${post.id}">
+        <div class="wall-post-header"><strong>${escapeHtml(post.name)}</strong><span>${escapeHtml(post.created_at)}</span></div>
+        ${post.body ? `<p>${escapeHtml(post.body)}</p>` : ""}
+        ${post.media_filename ? `<img src="/api/wall/media/${encodeURIComponent(post.media_filename)}" alt="Image publiée">` : ""}
+        <div class="wall-post-actions">
+          <button class="text-button wall-react" data-reaction="like" type="button">${post.my_reaction === "like" ? "❤️" : "♡"} ${post.reactions}</button>
+          <button class="text-button wall-comments-toggle" type="button">💬 ${post.comments}</button>
+          <button class="text-button wall-comment-add" type="button">Commenter</button>
+          ${post.is_mine ? '<button class="text-button wall-delete" type="button">Supprimer</button>' : ""}
+        </div>
+        <div class="wall-comments" hidden></div>
+      </article>
+    `).join("") : '<p class="muted">Le mur est encore vide.</p>';
+    list.querySelectorAll(".wall-react").forEach((button) => {
+      button.addEventListener("click", () => reactToWallPost(button.closest(".wall-post")));
+    });
+    list.querySelectorAll(".wall-comments-toggle").forEach((button) => {
+      button.addEventListener("click", () => toggleWallComments(button.closest(".wall-post")));
+    });
+    list.querySelectorAll(".wall-comment-add").forEach((button) => {
+      button.addEventListener("click", () => addWallComment(button.closest(".wall-post")));
+    });
+    list.querySelectorAll(".wall-delete").forEach((button) => {
+      button.addEventListener("click", () => deleteWallPost(button.closest(".wall-post")));
+    });
+  } catch (error) {
+    list.innerHTML = `<p class="error">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+async function reactToWallPost(post) {
+  const token = localStorage.getItem("bc_connect_token");
+  await request(`/api/wall/posts/${post.dataset.postId}/reaction`, {
+    method: "POST",
+    headers: {Authorization: `Bearer ${token}`},
+    body: JSON.stringify({reaction: "like"}),
+  });
+  loadWall();
+}
+
+async function toggleWallComments(post) {
+  const comments = post.querySelector(".wall-comments");
+  if (!comments.hidden) {
+    comments.hidden = true;
+    return;
+  }
+  const token = localStorage.getItem("bc_connect_token");
+  const items = await request(`/api/wall/posts/${post.dataset.postId}/comments`, {
+    headers: {Authorization: `Bearer ${token}`},
+  });
+  comments.innerHTML = items.length
+    ? items.map((item) => `<p><strong>${escapeHtml(item.name)}</strong> ${escapeHtml(item.body)}</p>`).join("")
+    : '<p class="muted">Aucun commentaire.</p>';
+  comments.hidden = false;
+}
+
+async function addWallComment(post) {
+  const body = window.prompt("Ton commentaire");
+  if (!body?.trim()) return;
+  const token = localStorage.getItem("bc_connect_token");
+  await request(`/api/wall/posts/${post.dataset.postId}/comments`, {
+    method: "POST",
+    headers: {Authorization: `Bearer ${token}`},
+    body: JSON.stringify({body: body.trim()}),
+  });
+  loadWall();
+}
+
+async function deleteWallPost(post) {
+  if (!window.confirm("Supprimer cette publication ?")) return;
+  const token = localStorage.getItem("bc_connect_token");
+  await request(`/api/wall/posts/${post.dataset.postId}`, {
+    method: "DELETE",
+    headers: {Authorization: `Bearer ${token}`},
+  });
+  loadWall();
+}
+
+async function saveModeratorCode(event) {
+  event.preventDefault();
+  const code = new FormData(event.currentTarget).get("code");
+  const token = localStorage.getItem("bc_connect_token");
+  await request("/api/admin/moderator-code", {
+    method: "POST",
+    headers: {Authorization: `Bearer ${token}`},
+    body: JSON.stringify({code}),
+  });
+  event.currentTarget.reset();
+  setMessage("Code d’invitation modérateur enregistré.");
 }
 
 function escapeHtml(value) {
@@ -183,6 +351,7 @@ async function submitAuth(event) {
     if (signupMode) {
       payload.name = nameInput.value;
       payload.privacy_accepted = privacyInput.checked;
+      payload.moderator_code = moderatorCodeInput.value;
     }
     const result = await request(signupMode ? "/api/register" : "/api/login", {
       method: "POST",
@@ -208,6 +377,13 @@ async function logout() {
   if (token) {
     await request("/api/logout", {method: "POST", headers: {Authorization: `Bearer ${token}`}});
   }
+  localStorage.removeItem("bc_connect_token");
+  form.hidden = false;
+  toggle.hidden = false;
+  account.hidden = true;
+  form.reset();
+  setSignupMode(true);
+}
 
   function connectRealtime() {
     const token = localStorage.getItem("bc_connect_token");
@@ -282,6 +458,7 @@ async function logout() {
       setMessage(error.message, true);
       button.disabled = false;
     }
+  }
 
     async function loadProfile() {
       const token = localStorage.getItem("bc_connect_token");
@@ -396,6 +573,7 @@ async function logout() {
       } finally {
         button.disabled = false;
       }
+  }
 
       function socialLink(label, value) {
         if (!value) return "";
@@ -436,6 +614,7 @@ async function logout() {
         } catch (error) {
           list.innerHTML = `<p class="error">${escapeHtml(error.message)}</p>`;
         }
+  }
 
         async function reportMatch(targetId) {
           const reason = window.prompt("Pourquoi veux-tu signaler ce match ?");
@@ -452,15 +631,20 @@ async function logout() {
           } catch (error) {
             setMessage(error.message, true);
           }
+  }
 
           async function loadAdmin() {
             const token = localStorage.getItem("bc_connect_token");
             const kyiList = document.querySelector("#admin-kyi-list");
             const reportList = document.querySelector("#admin-report-list");
+            const statsList = document.querySelector("#admin-stats");
+            const activityList = document.querySelector("#admin-activity");
             try {
-              const [kyi, reports] = await Promise.all([
+              const [kyi, reports, stats, activity] = await Promise.all([
                 request("/api/admin/kyi", {headers: {Authorization: `Bearer ${token}`}}),
                 request("/api/admin/reports", {headers: {Authorization: `Bearer ${token}`}}),
+                request("/api/admin/stats", {headers: {Authorization: `Bearer ${token}`}}),
+                request("/api/admin/activity", {headers: {Authorization: `Bearer ${token}`}}),
               ]);
               kyiList.innerHTML = kyi.length ? kyi.map((item) => `
                 <article class="admin-item">
@@ -482,6 +666,53 @@ async function logout() {
                   <button class="button secondary admin-report-action" data-id="${item.id}" data-action="dismiss" type="button">Classer</button>` : ""}
                 </article>
               `).join("") : '<p class="muted">Aucun signalement.</p>';
+              statsList.innerHTML = [
+                ["Utilisateurs", stats.total_users],
+                ["Profils validés", stats.approved_users],
+                ["En attente KYI", stats.pending_users],
+                ["Comptes bannis", stats.banned_users],
+                ["Signalements en attente", stats.pending_reports],
+                ["Matchs", stats.total_matches],
+                ["Likes aujourd’hui", stats.likes_today],
+              ].map(([label, value]) => `
+                <article class="stat-card"><strong>${escapeHtml(String(value))}</strong><span>${escapeHtml(label)}</span></article>
+              `).join("");
+              activityList.innerHTML = activity.length ? `
+                <div class="activity-list">
+                  ${activity.map((item) => `
+                    <article class="activity-item">
+                      <strong>${escapeHtml(item.action)}</strong>
+                      <span>${escapeHtml(item.actor_email)} · ${escapeHtml(item.created_at)}</span>
+                      ${item.details ? `<p>${escapeHtml(item.details)}</p>` : ""}
+                    </article>
+                  `).join("")}
+                </div>
+              ` : '<p class="muted">Aucune activité enregistrée.</p>';
+              document.querySelectorAll(".admin-tab").forEach((tab) => {
+                tab.onclick = () => {
+                  document.querySelectorAll(".admin-tab").forEach((item) => item.classList.toggle("active", item === tab));
+                  document.querySelectorAll(".admin-view").forEach((view) => {
+                    view.hidden = view.dataset.adminView !== tab.dataset.adminTab;
+                    view.classList.toggle("active", !view.hidden);
+                  });
+                };
+              });
+              document.querySelector("#export-activity").onclick = async () => {
+                const response = await fetch("/api/admin/activity.csv", {
+                  headers: {Authorization: `Bearer ${token}`},
+                });
+                if (!response.ok) {
+                  setMessage("Impossible d’exporter le journal.", true);
+                  return;
+                }
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement("a");
+                link.href = url;
+                link.download = "bc-connect-activity.csv";
+                link.click();
+                URL.revokeObjectURL(url);
+              };
               document.querySelectorAll(".admin-kyi-action").forEach((button) => {
                 button.addEventListener("click", () => decideKyi(Number(button.dataset.id), button.dataset.approved === "true"));
               });
@@ -528,8 +759,6 @@ async function logout() {
             });
             loadAdmin();
           }
-        }
-      }
 
       async function loadDiscover() {
         const list = document.querySelector("#discover-list");
@@ -635,15 +864,6 @@ async function logout() {
       document.querySelector("#close-match").addEventListener("click", () => {
         document.querySelector("#match-modal").hidden = true;
       });
-    }
-  }
-  localStorage.removeItem("bc_connect_token");
-  form.hidden = false;
-  toggle.hidden = false;
-  account.hidden = true;
-  form.reset();
-  setSignupMode(true);
-}
 
 toggle.addEventListener("click", () => setSignupMode(!signupMode));
 form.addEventListener("submit", submitAuth);
