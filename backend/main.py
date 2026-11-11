@@ -1,13 +1,16 @@
 import asyncio
+import csv
 import json
 import os
 import re
 import secrets
+import sqlite3
 from datetime import datetime
+from io import StringIO
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -35,12 +38,17 @@ main_loop: asyncio.AbstractEventLoop | None = None
 app = FastAPI(title=settings.app_name)
 
 
+def csv_safe(value) -> str:
+    text = "" if value is None else str(value)
+    return f"'{text}" if text.startswith(("=", "+", "-", "@")) else text
+
+
 async def notify_user(user_id: int, event: dict) -> None:
     sockets = list(active_sockets.get(user_id, set()))
     for socket in sockets:
         try:
             await socket.send_json(event)
-        except Exception:
+        except (OSError, RuntimeError):
             active_sockets.get(user_id, set()).discard(socket)
 
 
@@ -53,6 +61,23 @@ def current_daily_likes(db, user_id: int) -> int:
         (user_id,),
     ).fetchone()
     return int(row["count"])
+
+
+def log_activity(
+    db,
+    actor_id: int | None,
+    action: str,
+    target_type: str = "",
+    target_id: int | None = None,
+    details: str = "",
+) -> None:
+    db.execute(
+        """
+        insert into activity_logs(actor_id, action, target_type, target_id, details)
+        values (?, ?, ?, ?, ?)
+        """,
+        (actor_id, action, target_type, target_id, details),
+    )
 
 
 def send_push(user_id: int, payload: dict) -> None:
@@ -86,6 +111,7 @@ class RegisterPayload(BaseModel):
     password: str = Field(min_length=8)
     name: str = Field(min_length=1, max_length=120)
     privacy_accepted: bool
+    moderator_code: str = Field(default="", max_length=120)
 
 
 class LoginPayload(BaseModel):
@@ -134,6 +160,18 @@ class DeleteAccountPayload(BaseModel):
     password: str
 
 
+class WallReactionPayload(BaseModel):
+    reaction: str = Field(default="like", pattern="^(like|love|support)$")
+
+
+class WallCommentPayload(BaseModel):
+    body: str = Field(min_length=1, max_length=500)
+
+
+class ModeratorCodePayload(BaseModel):
+    code: str = Field(min_length=8, max_length=120)
+
+
 @app.on_event("startup")
 async def startup() -> None:
     global main_loop
@@ -161,6 +199,16 @@ def register(payload: RegisterPayload):
     password_hash, password_salt = hash_password(payload.password)
     is_admin = int(email in settings.admin_emails)
     with get_db() as db:
+        if not is_admin and payload.moderator_code.strip():
+            moderator_code = db.execute(
+                "select code_hash, code_salt from moderator_codes where id = 1"
+            ).fetchone()
+            if moderator_code and verify_password(
+                payload.moderator_code.strip(),
+                moderator_code["code_hash"],
+                moderator_code["code_salt"],
+            ):
+                is_admin = 1
         try:
             cursor = db.execute(
                 """
@@ -179,10 +227,8 @@ def register(payload: RegisterPayload):
                     datetime.utcnow().isoformat(),
                 ),
             )
-        except Exception as exc:
-            if "unique" in str(exc).lower():
-                raise HTTPException(status_code=409, detail="Cette adresse est déjà inscrite.") from exc
-            raise
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(status_code=409, detail="Cette adresse est déjà inscrite.") from exc
         user_id = cursor.lastrowid
     return {"token": create_session(user_id), "user_id": user_id}
 
@@ -411,6 +457,8 @@ def swipe(payload: SwipePayload, user=Depends(approved_user)):
     if payload.target_id == user["id"]:
         raise HTTPException(status_code=400, detail="Tu ne peux pas sélectionner ton propre profil.")
     matched = False
+    quota_message = ""
+    quota_banned = False
     with get_db() as db:
         target = db.execute(
             "select id from users where id = ? and approved = 1 and banned = 0",
@@ -426,39 +474,42 @@ def swipe(payload: SwipePayload, user=Depends(approved_user)):
             if strikes >= settings.spam_strikes_ban:
                 db.execute("update users set banned = 1 where id = ?", (user["id"],))
                 db.execute("delete from sessions where user_id = ?", (user["id"],))
+                quota_banned = True
             quota_message = (
                 "Compte suspendu pour dépassement répété du quota."
                 if strikes >= settings.spam_strikes_ban
                 else f"Quota quotidien atteint ({settings.daily_likes} likes)."
             )
-        else:
-            quota_message = ""
-        if quota_message:
-            return {"ok": False, "matched": False, "quota_exceeded": True, "message": quota_message}
-        db.execute(
-            """
-            insert into swipes(swiper_id, target_id, liked)
-            values (?, ?, ?)
-            on conflict(swiper_id, target_id) do update set liked = excluded.liked,
-            created_at = current_timestamp
-            """,
-            (user["id"], payload.target_id, int(payload.liked)),
-        )
-        if payload.liked:
-            reciprocal = db.execute(
+        if not quota_message:
+            db.execute(
                 """
-                select 1 from swipes
-                where swiper_id = ? and target_id = ? and liked = 1
+                insert into swipes(swiper_id, target_id, liked)
+                values (?, ?, ?)
+                on conflict(swiper_id, target_id) do update set liked = excluded.liked,
+                created_at = current_timestamp
                 """,
-                (payload.target_id, user["id"]),
-            ).fetchone()
-            if reciprocal:
-                user_a, user_b = sorted((user["id"], payload.target_id))
-                db.execute(
-                    "insert or ignore into matches(user_a, user_b) values (?, ?)",
-                    (user_a, user_b),
-                )
-                matched = True
+                (user["id"], payload.target_id, int(payload.liked)),
+            )
+            if payload.liked:
+                reciprocal = db.execute(
+                    """
+                    select 1 from swipes
+                    where swiper_id = ? and target_id = ? and liked = 1
+                    """,
+                    (payload.target_id, user["id"]),
+                ).fetchone()
+                if reciprocal:
+                    user_a, user_b = sorted((user["id"], payload.target_id))
+                    db.execute(
+                        "insert or ignore into matches(user_a, user_b) values (?, ?)",
+                        (user_a, user_b),
+                    )
+                    matched = True
+    if quota_message:
+        raise HTTPException(
+            status_code=403 if quota_banned else 429,
+            detail=quota_message,
+        )
     if matched and main_loop is not None:
         asyncio.create_task(notify_user(payload.target_id, {"type": "match"}))
         asyncio.create_task(
@@ -522,6 +573,7 @@ def report(payload: ReportPayload, user=Depends(approved_user)):
             """,
             (payload.target_id, user["id"]),
         )
+        log_activity(db, user["id"], "report_created", "user", payload.target_id, payload.reason.strip())
     return {"ok": True}
 
 
@@ -553,9 +605,243 @@ def decide_report(report_id: int, payload: ReportDecision, user=Depends(current_
             db.execute("update users set banned = 1 where id = ?", (report_row["reported_id"],))
             db.execute("delete from sessions where user_id = ?", (report_row["reported_id"],))
             db.execute("update reports set status = 'banned' where id = ?", (report_id,))
+            log_activity(db, user["id"], "report_banned", "report", report_id, f"user_id={report_row['reported_id']}")
         else:
             db.execute("update reports set status = 'dismissed' where id = ?", (report_id,))
+            log_activity(db, user["id"], "report_dismissed", "report", report_id)
     return {"ok": True, "status": "banned" if payload.action == "ban" else "dismissed"}
+
+
+@app.get("/api/admin/stats")
+def admin_stats(user=Depends(current_admin)):
+    with get_db() as db:
+        stats = db.execute(
+            """
+            select
+                (select count(*) from users) as total_users,
+                (select count(*) from users where approved = 1 and banned = 0) as approved_users,
+                (select count(*) from users where approved = 0 and banned = 0) as pending_users,
+                (select count(*) from users where banned = 1) as banned_users,
+                (select count(*) from reports where status = 'pending') as pending_reports,
+                (select count(*) from matches) as total_matches,
+                (select count(*) from swipes where liked = 1 and date(created_at) = date('now')) as likes_today
+            """
+        ).fetchone()
+    return dict(stats)
+
+
+@app.post("/api/admin/moderator-code")
+def set_moderator_code(payload: ModeratorCodePayload, user=Depends(current_admin)):
+    code_hash, code_salt = hash_password(payload.code.strip())
+    with get_db() as db:
+        db.execute(
+            """
+            insert into moderator_codes(id, code_hash, code_salt, created_by)
+            values (1, ?, ?, ?)
+            on conflict(id) do update set
+                code_hash = excluded.code_hash,
+                code_salt = excluded.code_salt,
+                created_by = excluded.created_by,
+                created_at = current_timestamp
+            """,
+            (code_hash, code_salt, user["id"]),
+        )
+        log_activity(db, user["id"], "moderator_code_changed", "system")
+    return {"ok": True}
+
+
+@app.get("/api/admin/activity")
+def admin_activity(user=Depends(current_admin)):
+    with get_db() as db:
+        rows = db.execute(
+            """
+            select a.id, a.action, a.target_type, a.target_id, a.details, a.created_at,
+                   coalesce(u.email, 'Système') as actor_email
+            from activity_logs a
+            left join users u on u.id = a.actor_id
+            order by a.created_at desc, a.id desc
+            limit 200
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.get("/api/admin/activity.csv")
+def export_admin_activity(user=Depends(current_admin)):
+    with get_db() as db:
+        rows = db.execute(
+            """
+            select a.id, a.created_at, coalesce(u.email, 'Système') as actor_email,
+                   a.action, a.target_type, a.target_id, a.details
+            from activity_logs a
+            left join users u on u.id = a.actor_id
+            order by a.created_at desc, a.id desc
+            """
+        ).fetchall()
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["id", "date", "acteur", "action", "type_cible", "id_cible", "details"])
+    writer.writerows(
+        (
+            csv_safe(row["id"]),
+            csv_safe(row["created_at"]),
+            csv_safe(row["actor_email"]),
+            csv_safe(row["action"]),
+            csv_safe(row["target_type"]),
+            csv_safe(row["target_id"] or ""),
+            csv_safe(row["details"]),
+        )
+        for row in rows
+    )
+    return Response(
+        content="\ufeff" + output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=bc-connect-activity.csv"},
+    )
+
+
+@app.get("/api/wall")
+def wall(user=Depends(approved_user)):
+    with get_db() as db:
+        rows = db.execute(
+            """
+            select p.id, p.user_id, u.name, p.body, p.media_filename,
+                   p.media_content_type, p.created_at,
+                   (p.user_id = ?) as is_mine,
+                   (select count(*) from wall_reactions r where r.post_id = p.id) as reactions,
+                   (select count(*) from wall_comments c where c.post_id = p.id) as comments,
+                   (select reaction from wall_reactions r where r.post_id = p.id and r.user_id = ?) as my_reaction
+            from wall_posts p
+            join users u on u.id = p.user_id
+            where u.banned = 0
+            order by p.created_at desc, p.id desc
+            limit 100
+            """,
+            (user["id"], user["id"]),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.post("/api/wall/posts", status_code=status.HTTP_201_CREATED)
+async def create_wall_post(
+    body: str = Form(default="", max_length=2000),
+    media: UploadFile | None = File(default=None),
+    user=Depends(approved_user),
+):
+    content = body.strip()
+    media_bytes = b""
+    filename = None
+    content_type = None
+    if media is not None:
+        if media.content_type not in ALLOWED_IMAGE_TYPES:
+            raise HTTPException(status_code=400, detail="Le média doit être une image JPG, PNG ou WEBP.")
+        media_bytes = await media.read(MAX_PHOTO_SIZE + 1)
+        if len(media_bytes) > MAX_PHOTO_SIZE:
+            raise HTTPException(status_code=413, detail="L’image ne doit pas dépasser 5 Mo.")
+        suffix = Path(media.filename or "").suffix.lower()
+        if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
+            suffix = ".jpg"
+        filename = f"wall-{user['id']}-{secrets.token_hex(12)}{suffix}"
+        content_type = media.content_type
+    if not content and not media_bytes:
+        raise HTTPException(status_code=400, detail="Ajoute un texte ou une image.")
+    if media_bytes:
+        UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+        (UPLOADS_DIR / filename).write_bytes(media_bytes)
+    with get_db() as db:
+        cursor = db.execute(
+            """
+            insert into wall_posts(user_id, body, media_filename, media_content_type)
+            values (?, ?, ?, ?)
+            """,
+            (user["id"], content, filename, content_type),
+        )
+        post_id = cursor.lastrowid
+        log_activity(db, user["id"], "wall_post_created", "post", post_id)
+    return {"ok": True, "post_id": post_id}
+
+
+@app.delete("/api/wall/posts/{post_id}")
+def delete_wall_post(post_id: int, user=Depends(approved_user)):
+    with get_db() as db:
+        post = db.execute(
+            "select user_id, media_filename from wall_posts where id = ?", (post_id,)
+        ).fetchone()
+        if post is None:
+            raise HTTPException(status_code=404, detail="Publication introuvable.")
+        if post["user_id"] != user["id"] and not user["is_admin"]:
+            raise HTTPException(status_code=403, detail="Suppression non autorisée.")
+        db.execute("delete from wall_posts where id = ?", (post_id,))
+        log_activity(db, user["id"], "wall_post_deleted", "post", post_id)
+    if post["media_filename"]:
+        (UPLOADS_DIR / post["media_filename"]).unlink(missing_ok=True)
+    return {"ok": True}
+
+
+@app.get("/api/wall/media/{filename}")
+def wall_media(filename: str, user=Depends(approved_user)):
+    with get_db() as db:
+        exists = db.execute(
+            "select 1 from wall_posts where media_filename = ?", (filename,)
+        ).fetchone()
+    path = UPLOADS_DIR / filename
+    if exists is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="Média introuvable.")
+    return FileResponse(path)
+
+
+@app.post("/api/wall/posts/{post_id}/reaction")
+def react_to_wall_post(post_id: int, payload: WallReactionPayload, user=Depends(approved_user)):
+    with get_db() as db:
+        if db.execute("select 1 from wall_posts where id = ?", (post_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Publication introuvable.")
+        db.execute(
+            """
+            insert into wall_reactions(post_id, user_id, reaction)
+            values (?, ?, ?)
+            on conflict(post_id, user_id) do update set reaction = excluded.reaction
+            """,
+            (post_id, user["id"], payload.reaction),
+        )
+    return {"ok": True}
+
+
+@app.delete("/api/wall/posts/{post_id}/reaction")
+def remove_wall_reaction(post_id: int, user=Depends(approved_user)):
+    with get_db() as db:
+        db.execute(
+            "delete from wall_reactions where post_id = ? and user_id = ?",
+            (post_id, user["id"]),
+        )
+    return {"ok": True}
+
+
+@app.post("/api/wall/posts/{post_id}/comments", status_code=status.HTTP_201_CREATED)
+def comment_on_wall_post(post_id: int, payload: WallCommentPayload, user=Depends(approved_user)):
+    with get_db() as db:
+        if db.execute("select 1 from wall_posts where id = ?", (post_id,)).fetchone() is None:
+            raise HTTPException(status_code=404, detail="Publication introuvable.")
+        cursor = db.execute(
+            "insert into wall_comments(post_id, user_id, body) values (?, ?, ?)",
+            (post_id, user["id"], payload.body.strip()),
+        )
+        log_activity(db, user["id"], "wall_comment_created", "post", post_id)
+    return {"ok": True, "comment_id": cursor.lastrowid}
+
+
+@app.get("/api/wall/posts/{post_id}/comments")
+def wall_comments(post_id: int, user=Depends(approved_user)):
+    with get_db() as db:
+        rows = db.execute(
+            """
+            select c.id, c.body, c.created_at, u.name
+            from wall_comments c join users u on u.id = c.user_id
+            where c.post_id = ?
+            order by c.created_at asc, c.id asc
+            """,
+            (post_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 @app.get("/api/account/export")
@@ -730,8 +1016,10 @@ def decide_kyi(user_id: int, payload: KyiDecision, user=Depends(current_admin)):
             raise HTTPException(status_code=404, detail="Utilisateur introuvable.")
         if payload.approved:
             db.execute("update users set approved = 1 where id = ?", (user_id,))
+            log_activity(db, user["id"], "kyi_approved", "user", user_id)
         else:
             db.execute("delete from users where id = ?", (user_id,))
+            log_activity(db, user["id"], "kyi_rejected", "user", user_id)
     if not payload.approved:
         card_files = list(KYI_DIR.glob(f"{user_id}-*"))
         for card_file in card_files:

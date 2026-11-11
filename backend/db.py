@@ -92,6 +92,49 @@ create table if not exists push_subs (
     subscription_json text not null,
     created_at text not null default current_timestamp
 );
+
+create table if not exists activity_logs (
+    id integer primary key autoincrement,
+    actor_id integer references users(id) on delete set null,
+    action text not null,
+    target_type text not null default '',
+    target_id integer,
+    details text not null default '',
+    created_at text not null default current_timestamp
+);
+
+create table if not exists moderator_codes (
+    id integer primary key check (id = 1),
+    code_hash text not null,
+    code_salt text not null,
+    created_by integer references users(id) on delete set null,
+    created_at text not null default current_timestamp
+);
+
+create table if not exists wall_posts (
+    id integer primary key autoincrement,
+    user_id integer not null references users(id) on delete cascade,
+    body text not null default '',
+    media_filename text,
+    media_content_type text,
+    created_at text not null default current_timestamp
+);
+
+create table if not exists wall_reactions (
+    post_id integer not null references wall_posts(id) on delete cascade,
+    user_id integer not null references users(id) on delete cascade,
+    reaction text not null default 'like',
+    created_at text not null default current_timestamp,
+    primary key (post_id, user_id)
+);
+
+create table if not exists wall_comments (
+    id integer primary key autoincrement,
+    post_id integer not null references wall_posts(id) on delete cascade,
+    user_id integer not null references users(id) on delete cascade,
+    body text not null,
+    created_at text not null default current_timestamp
+);
 """
 
 
