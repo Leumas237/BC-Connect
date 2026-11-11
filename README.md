@@ -9,10 +9,10 @@ filières : entraide, affinités, vie de campus et rencontres. L'application
 reprend les principes fonctionnels de SJDA-v3, adaptés à l'identité et au
 contexte de l'IUT-FV.
 
-> **État actuel :** v0.1 livrable pour revue. Le socle FastAPI + SQLite +
-> PWA est fonctionnel, avec inscription, connexion, sessions et déconnexion.
-> La validation KYI, les profils, la découverte, les matchs et la modération
-> constituent les prochains lots.
+> **État actuel :** version fonctionnelle en revue. Le socle FastAPI + SQLite +
+> PWA couvre l'inscription, la validation KYI, les profils, la découverte, les
+> matchs, le mur communautaire et la modération. Les tests de durcissement et
+> la préparation de production restent à finaliser.
 
 ## 1. Vision du produit
 
@@ -142,14 +142,22 @@ BC Connect ne prévoit pas de messagerie interne dans la première version.
 Après un match, les réseaux sociaux autorisés sont révélés pour permettre
 aux étudiants de poursuivre l'échange sur les plateformes adaptées.
 
+### Mon mur
+
+- publications texte et image visibles par les membres validés ;
+- réactions et commentaires ;
+- suppression de ses propres publications par l'auteur ;
+- onglets séparés pour le mur, le Swipe et la modération.
+
 ### Modération
 
 - tableau de bord administrateur ;
 - demandes KYI en attente ;
 - signalements ;
-- bannissement et rétablissement ;
-- promotion ou retrait du rôle modérateur ;
-- journal d'activité ;
+- bannissement et classement des signalements ;
+- statistiques d'usage ;
+- journal d'activité exportable en CSV ;
+- code d'invitation modérateur renouvelable depuis le dashboard ;
 - notifications temps réel pour les événements importants.
 
 ### Notifications et PWA
