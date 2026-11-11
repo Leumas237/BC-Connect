@@ -282,6 +282,40 @@ Pour la bêta publique :
 - créer un bucket privé `bc-connect` dans Supabase Storage ;
 - créer un compte avec une adresse de `BC_ADMIN_EMAILS` ;
 - communiquer aux testeurs l’URL bêta et un canal de retour ;
+
+## 10. Alternative gratuite : PythonAnywhere
+
+PythonAnywhere propose un compte Beginner gratuit avec une application web et
+deux consoles. Le déploiement ASGI/FastAPI est expérimental, mais l'application
+sert elle-même ses fichiers frontend et n'a donc pas besoin de mapping statique.
+
+Dans une console Bash PythonAnywhere :
+
+```bash
+git clone https://github.com/Leumas237/BC-Connect.git
+cd BC-Connect
+mkvirtualenv bc-connect --python=python3.10
+pip install -r requirements.txt
+```
+
+Créer ensuite un fichier `.env` dans `~/BC-Connect` avec les variables de
+`.env.example`, notamment `BC_DATABASE_URL`, `SUPABASE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_STORAGE_BUCKET` et
+`BC_ADMIN_EMAILS`. Ne jamais pousser ce fichier sur GitHub.
+
+Après avoir généré un token API PythonAnywhere, installer l'outil puis créer
+le site en remplaçant `USERNAME` par le nom du compte :
+
+```bash
+pip install --upgrade pythonanywhere
+pa website create \
+  --domain USERNAME.pythonanywhere.com \
+  --command '/home/USERNAME/.virtualenvs/bc-connect/bin/uvicorn --app-dir /home/USERNAME/BC-Connect --uds ${DOMAIN_SOCKET} backend.main:app'
+```
+
+Le compte gratuit autorise Supabase (`supabase.co`) en sortie. Les cartes KYI,
+photos et médias restent dans le bucket Supabase privé ; le dossier local
+PythonAnywhere ne sert que de fallback.
 - surveiller les logs, les signalements et l'espace disque ;
 - sauvegarder le disque avant toute migration ou modification de schéma.
 - incrémenter le cache du service worker.
