@@ -22,6 +22,7 @@ body {
 .brand img { width: 2rem; height: 2rem; border-radius: .6rem; }
 .campus { color: var(--muted); font-size: .9rem; }
 .nav-actions { display: flex; align-items: center; gap: .75rem; }
+.beta-banner { margin: .75rem 0 0; padding: .55rem .75rem; border: 1px solid rgba(251, 113, 133, .35); border-radius: .65rem; background: rgba(251, 113, 133, .08); color: #fecdd3; font-size: .78rem; text-align: center; }
 select { border: 1px solid var(--border); border-radius: .65rem; background: var(--card); color: var(--text); padding: .55rem .75rem; font: inherit; }
 .install-link { border: 0; background: transparent; color: var(--accent); cursor: pointer; font: inherit; font-weight: 700; padding: .25rem 0; }
 .hero { display: grid; justify-items: center; text-align: center; padding: 7rem 0 6rem; }

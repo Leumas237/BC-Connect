@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: bc-connect-beta
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: BC_APP_NAME
+        value: BC Connect Beta
+      - key: BC_DATA_DIR
+        value: /app/data
+      - key: BC_ADMIN_EMAILS
+        sync: false
+      - key: BC_DAILY_LIKES
+        value: "15"
+      - key: BC_SPAM_STRIKES_BAN
+        value: "30"
+      - key: BC_VAPID_PUBLIC_KEY
+        sync: false
+      - key: BC_VAPID_PRIVATE_KEY
+        sync: false
+      - key: BC_VAPID_CLAIMS_EMAIL
+        sync: false
+    disk:
+      name: bc-connect-beta-data
+      mountPath: /app/data
+      sizeGB: 1

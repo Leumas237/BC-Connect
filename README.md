@@ -239,10 +239,16 @@ Pendant le développement frontend, penser à mettre à jour le numéro de
 cache dans `frontend/sw.js` après toute modification de `index.html`,
 `app.js` ou `style.css`.
 
-## 9. Mise en production
+## 9. Bêta publique sur Render
 
 HTTPS est obligatoire. Une mise en ligne Render, Railway ou un VPS Docker
 est adaptée à l'échelle initiale.
+
+La configuration `render.yaml` prépare un service `bc-connect-beta` avec
+un disque persistant dédié monté sur `/app/data`, une base neuve et un
+health check sur `/api/health`. Les variables marquées `sync: false` doivent
+être renseignées dans Render avant le premier déploiement, notamment
+`BC_ADMIN_EMAILS`.
 
 Le stockage persistant doit être monté sur `/app/data` ou configuré via
 `BC_DATA_DIR`. Sans volume persistant, un redéploiement supprimerait la
@@ -268,6 +274,14 @@ Avant chaque mise en production :
 - tester un match, un signalement et un bannissement ;
 - vérifier les notifications push ;
 - sauvegarder `data/` ;
+
+Pour la bêta publique :
+
+- utiliser une base Render neuve, sans données de développement ;
+- créer un compte avec une adresse de `BC_ADMIN_EMAILS` ;
+- communiquer aux testeurs l’URL bêta et un canal de retour ;
+- surveiller les logs, les signalements et l'espace disque ;
+- sauvegarder le disque avant toute migration ou modification de schéma.
 - incrémenter le cache du service worker.
 
 ## 10. Tests manuels essentiels
