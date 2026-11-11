@@ -195,8 +195,8 @@ carte étudiante.
 
 Les garanties suivantes sont non négociables :
 
-1. Les cartes étudiantes de `data/kyi/` ne sont jamais servies comme fichiers
-   statiques.
+1. Les cartes étudiantes, en stockage local ou Supabase privé, ne sont jamais
+   servies comme fichiers statiques.
 2. Les réseaux sociaux ne sont jamais renvoyés dans la découverte.
 3. Le compteur « qui m'a liké » reste anonyme.
 4. Un refus ou une suppression efface aussi les fichiers du compte.
@@ -208,8 +208,9 @@ Les garanties suivantes sont non négociables :
 8. Les actions qui dépassent le quota sont enregistrées avant de lever une
    erreur HTTP volontaire.
 
-Le dossier `data/` doit être sauvegardé régulièrement. Il contient la base,
-les photos, les dossiers KYI et les clés nécessaires aux notifications push.
+En local, le dossier `data/` contient la base, les médias et les clés
+nécessaires aux notifications push. En bêta Supabase, la base et les médias
+sont externalisés ; il faut activer les sauvegardes Supabase.
 
 ## 8. Développement local
 
@@ -233,7 +234,7 @@ uvicorn backend.main:app --reload --port 8000
 ```
 
 Le compte créé avec cette adresse est administrateur et validé
-automatiquement. La validation KYI n'est pas encore implémentée dans v0.1.
+automatiquement.
 
 Pendant le développement frontend, penser à mettre à jour le numéro de
 cache dans `frontend/sw.js` après toute modification de `index.html`,
@@ -244,24 +245,24 @@ cache dans `frontend/sw.js` après toute modification de `index.html`,
 HTTPS est obligatoire. Une mise en ligne Render, Railway ou un VPS Docker
 est adaptée à l'échelle initiale.
 
-La configuration `render.yaml` prépare un service `bc-connect-beta` avec
-un disque persistant dédié monté sur `/app/data`, une base neuve et un
-health check sur `/api/health`. Les variables marquées `sync: false` doivent
+La configuration `render.yaml` prépare un service `bc-connect-beta` gratuit,
+connecté à Supabase pour la base PostgreSQL et le stockage des fichiers, avec
+un health check sur `/api/health`. Les variables marquées `sync: false` doivent
 être renseignées dans Render avant le premier déploiement, notamment
-`BC_ADMIN_EMAILS`.
+`BC_ADMIN_EMAILS`, `BC_DATABASE_URL`, `SUPABASE_URL` et
+`SUPABASE_SERVICE_ROLE_KEY`.
 
-Le stockage persistant doit être monté sur `/app/data` ou configuré via
-`BC_DATA_DIR`. Sans volume persistant, un redéploiement supprimerait la
-base, les photos, les dossiers KYI et les clés push.
+En mode Supabase, SQLite et le stockage local restent disponibles pour le
+développement, mais Render utilise PostgreSQL et Supabase Storage. La clé
+`SUPABASE_SERVICE_ROLE_KEY` ne doit jamais être exposée au frontend.
 
-Exemple conceptuel :
+Exemple conceptuel en mode local :
 
 ```powershell
 docker build -t bc-connect .
 docker run -d -p 8000:8000 `
   -v C:\bc-connect-data:/app/data `
   -e BC_ADMIN_EMAILS=admin@example.com `
-  -e BC_MOD_CODE=<secret> `
   bc-connect
 ```
 
@@ -273,11 +274,12 @@ Avant chaque mise en production :
 - vérifier les droits administrateur ;
 - tester un match, un signalement et un bannissement ;
 - vérifier les notifications push ;
-- sauvegarder `data/` ;
+- vérifier les sauvegardes Supabase ;
 
 Pour la bêta publique :
 
-- utiliser une base Render neuve, sans données de développement ;
+- utiliser un projet Supabase neuf, sans données de développement ;
+- créer un bucket privé `bc-connect` dans Supabase Storage ;
 - créer un compte avec une adresse de `BC_ADMIN_EMAILS` ;
 - communiquer aux testeurs l’URL bêta et un canal de retour ;
 - surveiller les logs, les signalements et l'espace disque ;

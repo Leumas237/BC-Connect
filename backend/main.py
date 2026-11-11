@@ -23,12 +23,11 @@ from .auth import (
     verify_password,
 )
 from .config import settings
-from .db import get_db, initialize_database
+from .db import get_db, initialize_database, today_condition
+from .storage import delete_asset, download_asset, upload_asset
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
-KYI_DIR = settings.data_dir / "kyi"
-UPLOADS_DIR = settings.data_dir / "uploads"
 MAX_KYI_SIZE = 5 * 1024 * 1024
 MAX_PHOTO_SIZE = 5 * 1024 * 1024
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
@@ -54,9 +53,9 @@ async def notify_user(user_id: int, event: dict) -> None:
 
 def current_daily_likes(db, user_id: int) -> int:
     row = db.execute(
-        """
+        f"""
         select count(*) as count from swipes
-        where swiper_id = ? and liked = 1 and date(created_at) = date('now')
+        where swiper_id = ? and liked = 1 and {today_condition("created_at")}
         """,
         (user_id,),
     ).fetchone()
@@ -216,6 +215,7 @@ def register(payload: RegisterPayload):
                     email, password_hash, password_salt, name, is_admin, approved, policy_accepted_at
                 )
                 values (?, ?, ?, ?, ?, ?, ?)
+                returning id
                 """,
                 (
                     email,
@@ -229,7 +229,7 @@ def register(payload: RegisterPayload):
             )
         except sqlite3.IntegrityError as exc:
             raise HTTPException(status_code=409, detail="Cette adresse est déjà inscrite.") from exc
-        user_id = cursor.lastrowid
+        user_id = cursor.fetchone()["id"]
     return {"token": create_session(user_id), "user_id": user_id}
 
 
@@ -364,18 +364,18 @@ async def upload_profile_photo(
         ).fetchone()["count"]
         if count >= 6:
             raise HTTPException(status_code=400, detail="Un profil ne peut pas contenir plus de 6 photos.")
-    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     suffix = Path(photo.filename or "").suffix.lower()
     if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
         suffix = ".jpg"
     filename = f"{user['id']}-{secrets.token_hex(12)}{suffix}"
-    (UPLOADS_DIR / filename).write_bytes(content)
+    storage_key = f"photos/{filename}"
+    upload_asset(storage_key, content, photo.content_type)
     with get_db() as db:
         cursor = db.execute(
-            "insert into photos(user_id, filename, content_type) values (?, ?, ?)",
-            (user["id"], filename, photo.content_type),
+            "insert into photos(user_id, filename, content_type) values (?, ?, ?) returning id",
+            (user["id"], storage_key, photo.content_type),
         )
-    return {"id": cursor.lastrowid}
+    return {"id": cursor.fetchone()["id"]}
 
 
 @app.delete("/api/profile/photos/{photo_id}")
@@ -388,15 +388,12 @@ def delete_profile_photo(photo_id: int, user=Depends(approved_user)):
         if photo is None:
             raise HTTPException(status_code=404, detail="Photo introuvable.")
         db.execute("delete from photos where id = ?", (photo_id,))
-    path = UPLOADS_DIR / photo["filename"]
-    path.unlink(missing_ok=True)
+    delete_asset(photo["filename"])
     return {"ok": True}
 
 
 @app.get("/api/profile/photo/{photo_id}")
 def get_profile_photo(photo_id: int, user=Depends(approved_user)):
-    from fastapi.responses import FileResponse
-
     with get_db() as db:
         photo = db.execute(
             """
@@ -409,7 +406,11 @@ def get_profile_photo(photo_id: int, user=Depends(approved_user)):
         ).fetchone()
     if photo is None:
         raise HTTPException(status_code=404, detail="Photo introuvable.")
-    return FileResponse(UPLOADS_DIR / photo["filename"], media_type=photo["content_type"])
+    try:
+        content = download_asset(photo["filename"])
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Photo introuvable.") from None
+    return Response(content=content, media_type=photo["content_type"])
 
 
 @app.get("/api/discover")
@@ -501,7 +502,7 @@ def swipe(payload: SwipePayload, user=Depends(approved_user)):
                 if reciprocal:
                     user_a, user_b = sorted((user["id"], payload.target_id))
                     db.execute(
-                        "insert or ignore into matches(user_a, user_b) values (?, ?)",
+                        "insert into matches(user_a, user_b) values (?, ?) on conflict do nothing",
                         (user_a, user_b),
                     )
                     matched = True
@@ -616,7 +617,7 @@ def decide_report(report_id: int, payload: ReportDecision, user=Depends(current_
 def admin_stats(user=Depends(current_admin)):
     with get_db() as db:
         stats = db.execute(
-            """
+            f"""
             select
                 (select count(*) from users) as total_users,
                 (select count(*) from users where approved = 1 and banned = 0) as approved_users,
@@ -624,7 +625,7 @@ def admin_stats(user=Depends(current_admin)):
                 (select count(*) from users where banned = 1) as banned_users,
                 (select count(*) from reports where status = 'pending') as pending_reports,
                 (select count(*) from matches) as total_matches,
-                (select count(*) from swipes where liked = 1 and date(created_at) = date('now')) as likes_today
+                (select count(*) from swipes where liked = 1 and {today_condition("created_at")}) as likes_today
             """
         ).fetchone()
     return dict(stats)
@@ -746,17 +747,17 @@ async def create_wall_post(
     if not content and not media_bytes:
         raise HTTPException(status_code=400, detail="Ajoute un texte ou une image.")
     if media_bytes:
-        UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-        (UPLOADS_DIR / filename).write_bytes(media_bytes)
+        filename = f"wall/{filename}"
+        upload_asset(filename, media_bytes, content_type)
     with get_db() as db:
         cursor = db.execute(
             """
             insert into wall_posts(user_id, body, media_filename, media_content_type)
-            values (?, ?, ?, ?)
+            values (?, ?, ?, ?) returning id
             """,
             (user["id"], content, filename, content_type),
         )
-        post_id = cursor.lastrowid
+        post_id = cursor.fetchone()["id"]
         log_activity(db, user["id"], "wall_post_created", "post", post_id)
     return {"ok": True, "post_id": post_id}
 
@@ -774,7 +775,7 @@ def delete_wall_post(post_id: int, user=Depends(approved_user)):
         db.execute("delete from wall_posts where id = ?", (post_id,))
         log_activity(db, user["id"], "wall_post_deleted", "post", post_id)
     if post["media_filename"]:
-        (UPLOADS_DIR / post["media_filename"]).unlink(missing_ok=True)
+        delete_asset(post["media_filename"])
     return {"ok": True}
 
 
@@ -784,10 +785,13 @@ def wall_media(filename: str, user=Depends(approved_user)):
         exists = db.execute(
             "select 1 from wall_posts where media_filename = ?", (filename,)
         ).fetchone()
-    path = UPLOADS_DIR / filename
-    if exists is None or not path.is_file():
+    if exists is None:
         raise HTTPException(status_code=404, detail="Média introuvable.")
-    return FileResponse(path)
+    try:
+        content = download_asset(filename)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Média introuvable.") from None
+    return Response(content=content)
 
 
 @app.post("/api/wall/posts/{post_id}/reaction")
@@ -822,11 +826,11 @@ def comment_on_wall_post(post_id: int, payload: WallCommentPayload, user=Depends
         if db.execute("select 1 from wall_posts where id = ?", (post_id,)).fetchone() is None:
             raise HTTPException(status_code=404, detail="Publication introuvable.")
         cursor = db.execute(
-            "insert into wall_comments(post_id, user_id, body) values (?, ?, ?)",
+            "insert into wall_comments(post_id, user_id, body) values (?, ?, ?) returning id",
             (post_id, user["id"], payload.body.strip()),
         )
         log_activity(db, user["id"], "wall_comment_created", "post", post_id)
-    return {"ok": True, "comment_id": cursor.lastrowid}
+    return {"ok": True, "comment_id": cursor.fetchone()["id"]}
 
 
 @app.get("/api/wall/posts/{post_id}/comments")
@@ -873,10 +877,20 @@ def delete_account(payload: DeleteAccountPayload, user=Depends(current_user)):
     if not verify_password(payload.password, user["password_hash"], user["password_salt"]):
         raise HTTPException(status_code=403, detail="Mot de passe incorrect.")
     with get_db() as db:
+        asset_rows = db.execute(
+            """
+            select filename as asset_key from photos where user_id = ?
+            union all
+            select card_path as asset_key from kyi where user_id = ?
+            union all
+            select media_filename as asset_key from wall_posts
+            where user_id = ? and media_filename is not null
+            """,
+            (user["id"], user["id"], user["id"]),
+        ).fetchall()
         db.execute("delete from users where id = ?", (user["id"],))
-    for folder in (KYI_DIR, UPLOADS_DIR):
-        for path in folder.glob(f"{user['id']}-*") if folder.exists() else []:
-            path.unlink(missing_ok=True)
+    for asset in asset_rows:
+        delete_asset(asset["asset_key"])
     return {"ok": True}
 
 
@@ -950,13 +964,12 @@ async def submit_kyi(
     if not content:
         raise HTTPException(status_code=400, detail="Le fichier de carte est vide.")
 
-    KYI_DIR.mkdir(parents=True, exist_ok=True)
     suffix = Path(card.filename or "").suffix.lower()
     if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
         suffix = ".jpg"
     filename = f"{user['id']}-{secrets.token_hex(12)}{suffix}"
-    destination = KYI_DIR / filename
-    destination.write_bytes(content)
+    storage_key = f"kyi/{filename}"
+    upload_asset(storage_key, content, card.content_type)
 
     with get_db() as db:
         previous = db.execute("select card_path from kyi where user_id = ?", (user["id"],)).fetchone()
@@ -971,12 +984,10 @@ async def submit_kyi(
                 card_path = excluded.card_path,
                 submitted_at = current_timestamp
             """,
-            (user["id"], full_name.strip(), birthdate.strip(), classe.strip(), filename),
+            (user["id"], full_name.strip(), birthdate.strip(), classe.strip(), storage_key),
         )
-    if previous and previous["card_path"] != filename:
-        old_file = KYI_DIR / previous["card_path"]
-        if old_file.exists():
-            old_file.unlink()
+    if previous and previous["card_path"] != storage_key:
+        delete_asset(previous["card_path"])
     return {"ok": True, "kyi_submitted": True}
 
 
@@ -996,16 +1007,15 @@ def pending_kyi(user=Depends(current_admin)):
 
 @app.get("/api/admin/kyi-card/{user_id}")
 def get_kyi_card(user_id: int, user=Depends(current_admin)):
-    from fastapi.responses import FileResponse
-
     with get_db() as db:
         row = db.execute("select card_path from kyi where user_id = ?", (user_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Carte KYI introuvable.")
-    path = KYI_DIR / row["card_path"]
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="Fichier KYI introuvable.")
-    return FileResponse(path)
+    try:
+        content = download_asset(row["card_path"])
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Fichier KYI introuvable.") from None
+    return Response(content=content, media_type="application/octet-stream")
 
 
 @app.post("/api/admin/kyi/{user_id}/decision")
@@ -1014,16 +1024,15 @@ def decide_kyi(user_id: int, payload: KyiDecision, user=Depends(current_admin)):
         target = db.execute("select id from users where id = ?", (user_id,)).fetchone()
         if target is None:
             raise HTTPException(status_code=404, detail="Utilisateur introuvable.")
+        card = db.execute("select card_path from kyi where user_id = ?", (user_id,)).fetchone()
         if payload.approved:
             db.execute("update users set approved = 1 where id = ?", (user_id,))
             log_activity(db, user["id"], "kyi_approved", "user", user_id)
         else:
             db.execute("delete from users where id = ?", (user_id,))
             log_activity(db, user["id"], "kyi_rejected", "user", user_id)
-    if not payload.approved:
-        card_files = list(KYI_DIR.glob(f"{user_id}-*"))
-        for card_file in card_files:
-            card_file.unlink(missing_ok=True)
+    if not payload.approved and card:
+        delete_asset(card["card_path"])
     return {"ok": True, "approved": payload.approved}
 
 
